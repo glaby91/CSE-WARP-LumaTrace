@@ -4,6 +4,8 @@
 
 **Socle retenu :** Qt 6 pour l'application et le chargement/contrôle de scène ; Direct3D 11 pour le Z-prepass, les buffers et les compute shaders HLSL (`cs_5_0`). La compilation et les vérifications de conformité se feront dans GitHub Actions sous Windows, comme pour le moteur d'origine. Les tests WARP valident la compilation et le comportement reproductible, mais ne prédisent pas les performances d'une carte graphique réelle.
 
+**Périmètre Git :** le moteur `moteur3d` (notamment sa branche 17.551) reste une référence en lecture seule. Les seules copies et adaptations de code seront faites dans le dépôt `CSE-WARP-LumaTrace`, branche `DX11LightTracing`, puis compilées depuis ce dépôt.
+
 ## Objectif
 
 Explorer un éclairage hybride qui conserve le raster classique pour la visibilité et réserve le lancer de rayons à l'estimation de la lumière. L'idée est de calculer une valeur d'éclairage par triangle visible, avec très peu de rayons par triangle, puis de lisser ces valeurs entre triangles voisins.
