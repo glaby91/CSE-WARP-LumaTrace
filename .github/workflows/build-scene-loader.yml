@@ -1,0 +1,33 @@
+name: Build LumaTrace scene loader
+
+on:
+  push:
+    branches: [DX11LightTracing]
+    paths:
+      - 'CMakeLists.txt'
+      - 'src/scene/**'
+      - '.github/workflows/build-scene-loader.yml'
+  pull_request:
+    branches: [DX11LightTracing]
+    paths:
+      - 'CMakeLists.txt'
+      - 'src/scene/**'
+      - '.github/workflows/build-scene-loader.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+      - name: Compile scene loader
+        run: cmake --build build --config Release --parallel 2
