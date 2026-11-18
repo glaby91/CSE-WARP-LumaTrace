@@ -7,7 +7,7 @@ Deux variantes GLB du même modèle sont incluses pour tester l'impact des textu
 | `porsche_930_textures_1k.glb` | 22 MB | 241 260 triangles | 27 images, principalement 1024 × 1024 |
 | `porsche_930_textures_2k_4k.glb` | 74 MB | 241 260 triangles | 27 images, jusqu'à 4096 × 4096 |
 
-Le nombre de triangles est identique ; la différence de qualité provient principalement des textures. Les GLB sont suivis avec Git LFS.
+Le nombre de triangles est identique ; la différence de qualité provient principalement des textures. Les fichiers binaires sont des pièces jointes de travail de cette session ; seul leur descriptif et leurs métriques ont été publiés dans le dépôt distant pour l'instant.
 
 ## Source et attribution
 
