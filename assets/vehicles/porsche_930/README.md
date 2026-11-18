@@ -1,6 +1,6 @@
 # Porsche 911 (930) Turbo, 1975 — modèle de test
 
-Deux variantes GLB du même modèle sont incluses pour tester l'impact des textures :
+Deux variantes GLB du même modèle ont été analysées pour tester l'impact des textures. Leurs métadonnées sont consignées ici ; les binaires ne sont pas encore présents dans la branche distante :
 
 | Fichier | Taille approximative | Géométrie | Textures |
 |---|---:|---:|---|
