@@ -2,6 +2,13 @@
 
 **Référentiel consulté :** `glaby91/moteur3d`, branche `codex/v17.600-mega` (18 novembre 2026), avec vérification des documents de la branche `master`. La branche `v17.551` n'a pas été retrouvée parmi les branches publiées ; cet audit n'affirme donc pas avoir inspecté ce commit précis.
 
+## Règle de travail et dépôt cible
+
+- `moteur3d` et sa branche `v17.551` sont une **source de référence en lecture seule**. Aucun commit, correctif ou changement ne sera poussé dans ce dépôt.
+- Les seuls fichiers adaptés ou développés pour l'expérience iront dans [`CSE-WARP-LumaTrace`, branche `DX11LightTracing`](https://github.com/glaby91/CSE-WARP-LumaTrace/tree/DX11LightTracing).
+- Le prototype gardera Qt 6 et Direct3D 11. Sa compilation et ses validations seront rattachées à GitHub Actions dans le dépôt LumaTrace, dès qu'il contiendra le code applicatif.
+- Les constats techniques ci-dessous viennent des sources accessibles sur `codex/v17.600-mega` et `master`. Ils servent à préparer la copie/adaptation ; ils ne remplacent pas la comparaison finale avec le contenu exact de `v17.551` avant le portage.
+
 ## Résumé
 
 Le moteur d'origine fournit déjà les briques importantes : Qt 6, chargement de scènes modulaires, conversion vers une scène de triangles, BVH CPU, backend raster D3D11, et compute shader HLSL qui parcourt un BVH. **Le concept LumaTrace n'est donc pas à reconstruire depuis zéro.** Le nouveau travail porte surtout sur l'identification des triangles visibles, l'éclairage échantillonné par triangle, le filtrage entre triangles et une intégration propre au chemin D3D11 existant.
