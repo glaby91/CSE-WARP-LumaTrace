@@ -4,7 +4,7 @@
 
 **Socle retenu :** Qt 6 pour l'application et le chargement/contrôle de scène ; Direct3D 11 pour le Z-prepass, les buffers et les compute shaders HLSL (`cs_5_0`). La compilation et les vérifications de conformité se feront dans GitHub Actions sous Windows, comme pour le moteur d'origine. Les tests WARP valident la compilation et le comportement reproductible, mais ne prédisent pas les performances d'une carte graphique réelle.
 
-**Périmètre Git :** le moteur `moteur3d` (notamment sa branche 17.551) reste une référence en lecture seule. Les seules copies et adaptations de code seront faites dans le dépôt `CSE-WARP-LumaTrace`, branche `DX11LightTracing`, puis compilées depuis ce dépôt.
+**Périmètre Git :** le build V17.551 est le run 551 du commit de la branche `codex/v17.523-full-vulkan-shipping` dans `moteur3d`; ce code reste une référence en lecture seule. Les seules copies et adaptations seront faites dans `CSE-WARP-LumaTrace`, branche `DX11LightTracing`, puis compilées depuis ce dépôt.
 
 ## Objectif
 
