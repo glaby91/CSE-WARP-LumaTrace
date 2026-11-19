@@ -24,7 +24,7 @@ jobs:
   build:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
@@ -63,7 +63,7 @@ jobs:
           } else {
             Write-Warning 'Executable compiled, but the original Porsche GLB is not tracked in this checkout; the scene cannot be launched until the licensed source asset is supplied.'
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: CSE-WARP-LumaTrace-windows-x64-compile
           path: build/app/Release/
