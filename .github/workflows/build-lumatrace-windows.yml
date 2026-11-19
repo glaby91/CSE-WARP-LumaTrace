@@ -1,0 +1,70 @@
+name: Build LumaTrace (Windows DX11)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'src/**'
+      - 'assets/vehicles/porsche_930/scene/**'
+      - '.github/workflows/build-lumatrace-windows.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'src/**'
+      - 'assets/vehicles/porsche_930/scene/**'
+      - '.github/workflows/build-lumatrace-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Compile HLSL shader entry points
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter fxc.exe -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\fxc\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $fxc) { throw 'fxc.exe was not found in the Windows SDK.' }
+          New-Item -ItemType Directory -Force -Path build/shaders | Out-Null
+          & $fxc /nologo /T cs_5_0 /E CSCollectVisible /Fo build/shaders/collect.cso src/render/shaders/triangle_lighting.hlsl
+          if ($LASTEXITCODE -ne 0) { throw 'CSCollectVisible compilation failed.' }
+          & $fxc /nologo /T cs_5_0 /E CSShadeVisibleTriangles /Fo build/shaders/shade.cso src/render/shaders/triangle_lighting.hlsl
+          if ($LASTEXITCODE -ne 0) { throw 'CSShadeVisibleTriangles compilation failed.' }
+          & $fxc /nologo /T vs_5_0 /E VSMain /Fo build/shaders/raster_vs.cso src/render/shaders/raster_pbr.hlsl
+          if ($LASTEXITCODE -ne 0) { throw 'Raster vertex shader compilation failed.' }
+          & $fxc /nologo /T ps_5_0 /E PSMain /Fo build/shaders/raster_ps.cso src/render/shaders/raster_pbr.hlsl
+          if ($LASTEXITCODE -ne 0) { throw 'Raster pixel shader compilation failed.' }
+      - name: Configure
+        run: cmake -S . -B build/app -A x64 -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+      - name: Build LumaTrace application
+        run: cmake --build build/app --config Release --target CSE_WARP_LumaTrace --parallel 2
+      - name: Deploy Qt runtime
+        run: windeployqt --release --no-translations build/app/Release/CSE_WARP_LumaTrace.exe
+      - name: Report scene asset status
+        shell: pwsh
+        run: |
+          if (Test-Path 'assets/vehicles/porsche_930/scene/porsche_930.glb') {
+            Write-Host 'Porsche GLB is present.'
+          } else {
+            Write-Warning 'Executable compiled, but the original Porsche GLB is not tracked in this checkout; the scene cannot be launched until the licensed source asset is supplied.'
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CSE-WARP-LumaTrace-windows-x64-compile
+          path: build/app/Release/
+          if-no-files-found: error
