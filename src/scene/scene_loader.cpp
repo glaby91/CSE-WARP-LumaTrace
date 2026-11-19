@@ -54,7 +54,7 @@ bool jsonVec(const QJsonValue& value, int count, float* out, QString& error,
 QByteArray decodeDataUri(const QString& uri, QString& error, diagnostics::RunLogger* logger) {
     std::optional<diagnostics::RunLogger::Scope> timing;
     if(logger)timing.emplace(logger->scope(QStringLiteral("decodeDataUri · base64/url")));
-    const int comma = uri.indexOf(',');
+    const int comma = uri.indexOf(QLatin1Char(','));
     if (!uri.startsWith(QStringLiteral("data:")) || comma < 0) {
         error = QStringLiteral("Malformed glTF data URI.");
         return {};
