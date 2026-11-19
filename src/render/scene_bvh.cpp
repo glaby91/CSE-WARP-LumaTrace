@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <limits>
 #include <numeric>
 
 namespace lumatrace::render {
@@ -38,6 +40,11 @@ struct BuildBounds {
     Vec3 hi{-1.e30f,-1.e30f,-1.e30f};
     void add(Vec3 p){lo={std::min(lo.x,p.x),std::min(lo.y,p.y),std::min(lo.z,p.z)};
                    hi={std::max(hi.x,p.x),std::max(hi.y,p.y),std::max(hi.z,p.z)};}
+    void add(const BuildBounds& b){if(b.lo.x<=b.hi.x && b.lo.y<=b.hi.y && b.lo.z<=b.hi.z){add(b.lo);add(b.hi);}}
+    float area() const {
+        const float x=std::max(0.f,hi.x-lo.x), y=std::max(0.f,hi.y-lo.y), z=std::max(0.f,hi.z-lo.z);
+        return 2.f*(x*y+y*z+z*x);
+    }
 };
 
 } // namespace
@@ -67,43 +74,147 @@ SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
     if(out.triangles.empty()) return out;
     out.triangleOrder.resize(out.triangles.size());
     std::iota(out.triangleOrder.begin(),out.triangleOrder.end(),0u);
-    const auto build=[&](auto&& self,std::uint32_t first,std::uint32_t count)->std::uint32_t {
-        BuildBounds b,cb;
-        for(std::uint32_t i=first;i<first+count;++i){
+
+    // Build a binary SAH tree first; it preserves the familiar 12-bin SAH
+    // partitioning, then collapse its upper levels into four-way GPU nodes.
+    struct BinaryNode {
+        BuildBounds bounds;
+        std::uint32_t left=0, right=0, first=0, count=0;
+        bool leaf=false;
+    };
+    std::vector<BinaryNode> binary;
+    binary.reserve(out.triangles.size()*2u/std::max(1u,leafSize));
+    constexpr int BinCount=12;
+    const auto binFor=[&](float value,float lo,float hi) {
+        const float normalized=(value-lo)/(hi-lo);
+        return std::min(BinCount-1,std::max(0,int(normalized*float(BinCount))));
+    };
+    const auto buildBinary=[&](auto&& self,std::uint32_t first,std::uint32_t count)->std::uint32_t {
+        BuildBounds bounds,centroidBounds;
+        for(std::uint32_t i=first;i<first+count;++i) {
             const auto& t=out.triangles[out.triangleOrder[i]];
-            b.add(t.p0);b.add(t.p1);b.add(t.p2);cb.add(centroid(t));
+            bounds.add(t.p0);bounds.add(t.p1);bounds.add(t.p2);
+            centroidBounds.add(centroid(t));
         }
-        GpuBvhNode node{};
-        node.minX=b.lo.x;node.minY=b.lo.y;node.minZ=b.lo.z;
-        node.maxX=b.hi.x;node.maxY=b.hi.y;node.maxZ=b.hi.z;
-        const std::uint32_t at=std::uint32_t(out.nodes.size());
-        out.nodes.push_back(node);
-        if(count<=std::max(1u,leafSize)){
-            out.nodes[at].firstTriangle=first;
-            out.nodes[at].triangleCount=count;
+        const std::uint32_t at=std::uint32_t(binary.size());
+        binary.emplace_back();
+        binary[at].bounds=bounds;
+        if(count<=std::max(1u,leafSize)) {
+            binary[at].leaf=true;binary[at].first=first;binary[at].count=count;
             return at;
         }
-        const Vec3 extent{cb.hi.x-cb.lo.x,cb.hi.y-cb.lo.y,cb.hi.z-cb.lo.z};
-        int axis=extent.y>extent.x?1:0;
-        if((axis==0?extent.x:extent.y)<extent.z)axis=2;
-        const auto coord=[axis](const GpuTriangle& t){const auto c=centroid(t);return axis==0?c.x:axis==1?c.y:c.z;};
-        const std::uint32_t mid=first+count/2;
-        std::nth_element(out.triangleOrder.begin()+first,out.triangleOrder.begin()+mid,
-            out.triangleOrder.begin()+first+count,[&](std::uint32_t l,std::uint32_t r){
-                return coord(out.triangles[l])<coord(out.triangles[r]);
+
+        const float centroidLo[3]={centroidBounds.lo.x,centroidBounds.lo.y,centroidBounds.lo.z};
+        const float centroidHi[3]={centroidBounds.hi.x,centroidBounds.hi.y,centroidBounds.hi.z};
+        float bestCost=std::numeric_limits<float>::infinity();
+        int bestAxis=-1,bestSplit=-1;
+        struct Bin { BuildBounds bounds; std::uint32_t count=0; };
+        for(int axis=0;axis<3;++axis) {
+            const float lo=centroidLo[axis],hi=centroidHi[axis];
+            if(hi-lo<=1.e-8f) continue;
+            Bin bins[BinCount];
+            const auto coord=[&](const GpuTriangle& t) {
+                const auto c=centroid(t);return axis==0?c.x:axis==1?c.y:c.z;
+            };
+            for(std::uint32_t i=first;i<first+count;++i) {
+                const auto& t=out.triangles[out.triangleOrder[i]];
+                Bin& bin=bins[binFor(coord(t),lo,hi)];
+                ++bin.count;bin.bounds.add(t.p0);bin.bounds.add(t.p1);bin.bounds.add(t.p2);
+            }
+            BuildBounds leftBounds[BinCount-1],rightBounds[BinCount-1];
+            std::uint32_t leftCounts[BinCount-1]={},rightCounts[BinCount-1]={};
+            BuildBounds runningLeft,runningRight;
+            std::uint32_t runningLeftCount=0,runningRightCount=0;
+            for(int i=0;i<BinCount-1;++i) {
+                runningLeft.add(bins[i].bounds);runningLeftCount+=bins[i].count;
+                leftBounds[i]=runningLeft;leftCounts[i]=runningLeftCount;
+                const int r=BinCount-1-i;
+                runningRight.add(bins[r].bounds);runningRightCount+=bins[r].count;
+                rightBounds[r-1]=runningRight;rightCounts[r-1]=runningRightCount;
+            }
+            for(int split=0;split<BinCount-1;++split) {
+                if(leftCounts[split]==0||rightCounts[split]==0) continue;
+                const float cost=leftBounds[split].area()*float(leftCounts[split])
+                                +rightBounds[split].area()*float(rightCounts[split]);
+                if(cost<bestCost){bestCost=cost;bestAxis=axis;bestSplit=split;}
+            }
+        }
+
+        std::uint32_t mid=first;
+        if(bestAxis>=0) {
+            const float lo=centroidLo[bestAxis],hi=centroidHi[bestAxis];
+            auto begin=out.triangleOrder.begin()+first;
+            auto finish=out.triangleOrder.begin()+first+count;
+            auto pivot=std::partition(begin,finish,[&](std::uint32_t id) {
+                const auto c=centroid(out.triangles[id]);
+                const float value=bestAxis==0?c.x:bestAxis==1?c.y:c.z;
+                return binFor(value,lo,hi)<=bestSplit;
             });
+            mid=std::uint32_t(pivot-out.triangleOrder.begin());
+        }
+        if(mid==first||mid==first+count) {
+            const Vec3 e{centroidBounds.hi.x-centroidBounds.lo.x,
+                         centroidBounds.hi.y-centroidBounds.lo.y,
+                         centroidBounds.hi.z-centroidBounds.lo.z};
+            int axis=e.y>e.x?1:0;if((axis==0?e.x:e.y)<e.z)axis=2;
+            mid=first+count/2;
+            const auto coord=[axis](const GpuTriangle& t) {
+                const auto c=centroid(t);return axis==0?c.x:axis==1?c.y:c.z;
+            };
+            std::nth_element(out.triangleOrder.begin()+first,out.triangleOrder.begin()+mid,
+                out.triangleOrder.begin()+first+count,[&](std::uint32_t l,std::uint32_t r) {
+                    return coord(out.triangles[l])<coord(out.triangles[r]);
+                });
+        }
         const auto left=self(self,first,mid-first);
         const auto right=self(self,mid,first+count-mid);
-        out.nodes[at].leftChild=left;out.nodes[at].rightChild=right;
-        out.nodes[at].firstTriangle=0;out.nodes[at].triangleCount=0;
+        binary[at].left=left;binary[at].right=right;
         return at;
     };
-    build(build,0,std::uint32_t(out.triangles.size()));
+    const std::uint32_t binaryRoot=buildBinary(buildBinary,0,std::uint32_t(out.triangles.size()));
+
+    // Greedily expand the largest-area binary interior while there is room,
+    // giving each wide node up to four children and retaining leaf ranges.
+    const auto emitWide=[&](auto&& self,std::uint32_t sourceIndex)->std::uint32_t {
+        const std::uint32_t at=std::uint32_t(out.nodes.size());
+        out.nodes.emplace_back();
+        const BinaryNode& sourceNode=binary[sourceIndex];
+        auto& node=out.nodes[at];
+        node.minX=sourceNode.bounds.lo.x;node.minY=sourceNode.bounds.lo.y;node.minZ=sourceNode.bounds.lo.z;
+        node.maxX=sourceNode.bounds.hi.x;node.maxY=sourceNode.bounds.hi.y;node.maxZ=sourceNode.bounds.hi.z;
+        if(sourceNode.leaf) {
+            node.firstTriangle=sourceNode.first;node.triangleCount=sourceNode.count;
+            return at;
+        }
+        std::vector<std::uint32_t> children{sourceNode.left,sourceNode.right};
+        while(children.size()<4) {
+            auto candidate=children.end();
+            float largestArea=-1.f;
+            for(auto it=children.begin();it!=children.end();++it) {
+                const auto& child=binary[*it];
+                if(!child.leaf && child.bounds.area()>largestArea) {
+                    largestArea=child.bounds.area();candidate=it;
+                }
+            }
+            if(candidate==children.end()) break;
+            const auto expanded=*candidate;
+            const auto position=std::size_t(candidate-children.begin());
+            children.erase(candidate);
+            children.insert(children.begin()+position,{binary[expanded].left,binary[expanded].right});
+        }
+        std::uint32_t childIndices[4]={};
+        for(std::size_t i=0;i<children.size();++i) childIndices[i]=self(self,children[i]);
+        GpuBvhNode& target=out.nodes[at];
+        target.child0=childIndices[0];target.child1=childIndices[1];
+        target.child2=childIndices[2];target.child3=childIndices[3];
+        target.childCount=std::uint32_t(children.size());
+        return at;
+    };
+    emitWide(emitWide,binaryRoot);
     const auto& root=out.nodes.front();
     out.bounds.minimum={root.minX,root.minY,root.minZ};
     out.bounds.maximum={root.maxX,root.maxY,root.maxZ};
     out.bounds.valid=true;
     return out;
 }
-
 } // namespace lumatrace::render

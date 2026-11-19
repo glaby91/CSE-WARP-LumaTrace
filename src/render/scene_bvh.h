@@ -8,16 +8,18 @@
 
 namespace lumatrace::render {
 
-// 48-byte layout shared verbatim with triangle_lighting.hlsl.
+// 56-byte four-way node layout shared verbatim with triangle_lighting.hlsl.
 struct GpuBvhNode {
     float minX, minY, minZ;
-    std::uint32_t leftChild;
+    std::uint32_t child0;
     float maxX, maxY, maxZ;
-    std::uint32_t rightChild;
+    std::uint32_t child1;
+    std::uint32_t child2;
+    std::uint32_t child3;
     std::uint32_t firstTriangle;
     std::uint32_t triangleCount;
-    std::uint32_t padding0 = 0;
-    std::uint32_t padding1 = 0;
+    std::uint32_t childCount;
+    std::uint32_t padding = 0;
 };
 
 struct GpuTriangle {
@@ -38,10 +40,10 @@ struct SceneBvh {
     scene::Bounds bounds;
 };
 
-static_assert(sizeof(GpuBvhNode) == 48, "Keep the HLSL BVH node packing in sync");
+static_assert(sizeof(GpuBvhNode) == 56, "Keep the HLSL BVH node packing in sync");
 static_assert(sizeof(GpuTriangle) == 128, "Keep the HLSL triangle packing in sync");
 
-// Builds the reusable CPU acceleration structure once after scene loading.
+// Builds a 12-bin SAH hierarchy, then collapses it into reusable four-way nodes.
 // The same packed nodes/triangles are uploaded to the D3D11 compute shader.
 SceneBvh buildSceneBvh(const scene::Scene& scene, std::uint32_t leafSize = 6);
 

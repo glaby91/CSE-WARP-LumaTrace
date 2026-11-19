@@ -11,9 +11,11 @@ struct Triangle
 };
 struct BvhNode
 {
-    float3 minimum; uint leftChild;
-    float3 maximum; uint rightChild;
-    uint firstTriangle; uint triangleCount; uint pad0; uint pad1;
+    float3 minimum; uint child0;
+    float3 maximum; uint child1;
+    uint child2; uint child3;
+    uint firstTriangle; uint triangleCount;
+    uint childCount; uint padding;
 };
 struct MaterialData { float4 baseColor; float metallic; float roughness; float2 pad; };
 
@@ -108,10 +110,18 @@ bool TraceScene(float3 origin, float3 direction, float maxDistance, uint sourceT
                 { hitDistance = t; hitTriangle = id; hitBarycentrics = barycentrics; }
             }
         }
-        else if (top < 62)
+        else if (node.childCount > 0 && top + node.childCount <= 64)
         {
-            stack[top++] = node.rightChild;
-            stack[top++] = node.leftChild;
+            [unroll] for (uint child = 0; child < 4; ++child)
+            {
+                if (child < node.childCount)
+                {
+                    uint childIndex = child == 0 ? node.child0 :
+                                      child == 1 ? node.child1 :
+                                      child == 2 ? node.child2 : node.child3;
+                    stack[top++] = childIndex;
+                }
+            }
         }
     }
     return hitTriangle != 0xffffffff;
