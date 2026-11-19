@@ -69,7 +69,13 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     float4 base = BaseColorMap.Sample(MaterialSampler, input.uv) * BaseColorFactor * input.color;
     const uint alphaMode = (uint)SurfaceFactors.w;
     if (alphaMode == 1 && base.a < SurfaceFactors.z) discard;
-    if (DetailFactors.z > 0.5) { float3 glow=EmissiveFactor.rgb; return float4(pow(glow/(1.0+glow),1.0/2.2),1.0); }
+    if (DetailFactors.z > 0.5) {
+        float3 emitterView=normalize(CameraPosition.xyz-input.worldPosition);
+        float facing=saturate(dot(normalize(input.normal),emitterView));
+        float rim=pow(1.0-facing,3.0);
+        float3 glow=EmissiveFactor.rgb*(0.42+0.58*facing)+float3(0.08,0.08,0.08)*rim;
+        return float4(pow(glow/(1.0+glow),1.0/2.2),1.0);
+    }
 
     float4 mr = MetallicRoughnessMap.Sample(MaterialSampler, input.uv);
     float metallic = saturate(SurfaceFactors.x * mr.b);
@@ -94,7 +100,7 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     float3 fillDirection = normalize(float3(0.65, 0.35, -0.67));
     float fillNdotL = saturate(dot(n, fillDirection));
     float3 fill = fillNdotL * float3(0.04, 0.055, 0.065);
-    float3 diffuse = base.rgb * (0.32 + triLight.rgb + fill) * (1.0 - metallic) * ao;
+    float3 diffuse = base.rgb * (0.48 + triLight.rgb + fill) * (1.0 - metallic) * ao;
     float specularPower = lerp(96.0, 4.0, roughness);
     float3 specular = 0.0;
     float3 toLight1 = LightPosition - input.worldPosition;

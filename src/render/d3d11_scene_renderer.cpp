@@ -130,7 +130,7 @@ struct D3D11SceneRenderer::Impl {
     std::vector<Draw> draws; ComPtr<ID3D11Buffer> emitterVb,emitterIb; UINT emitterIndexCount=0; std::vector<std::array<ComPtr<ID3D11ShaderResourceView>,5>> materialTextures;
     ComPtr<ID3D11ShaderResourceView> computeBaseColorArray;
     std::array<ComPtr<ID3D11ShaderResourceView>,5> fallbackTextures;
-    std::array<float,16> vp{}; float camera[3]{}; float orbitCenter[3]{}, orbitRadius=1.65f, orbitAngleDegrees=0.f; float orbitAxis1[3]{},orbitBasis1[3]{},orbitAxis2[3]{},orbitBasis2[3]{}; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
+    std::array<float,16> vp{}; float camera[3]{}; float orbitCenter[3]{}, orbitAngleDegrees=0.f; float orbitAxis1[3]{},orbitBasis1[3]{},orbitAxis2[3]{},orbitBasis2[3]{}; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
     diagnostics::RunLogger* logger=nullptr; QString imageOutputPath;
 
     bool makeTexture(const QImage& source, ComPtr<ID3D11ShaderResourceView>& out, bool srgb=false) {
@@ -389,8 +389,16 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh,QI
     const float orbitRadians=x.orbitAngleDegrees*kPi/180.f;
     // Two differently colored, equal-power area emitters orbit in opposed inclined paths.
     LightConstants lc{};lc.width=kWidth;lc.height=kHeight;lc.triangleCount=x.triCount;lc.samples=x.samples;lc.camera[0]=x.camera[0];lc.camera[1]=x.camera[1];lc.camera[2]=x.camera[2];lc.epsilon=std::max(1.e-4f,std::sqrt(std::pow(scene.bounds.maximum.x-scene.bounds.minimum.x,2.f)+std::pow(scene.bounds.maximum.y-scene.bounds.minimum.y,2.f)+std::pow(scene.bounds.maximum.z-scene.bounds.minimum.z,2.f))*1.e-5f);
+    const float halfX=(scene.bounds.maximum.x-scene.bounds.minimum.x)*.5f;
+    const float halfY=(scene.bounds.maximum.y-scene.bounds.minimum.y)*.5f;
+    const float halfZ=(scene.bounds.maximum.z-scene.bounds.minimum.z)*.5f;
+    // A circumscribed sphere keeps both emitters outside the car while maintaining a true circular orbit.
+    const float orbitRadius=std::sqrt(halfX*halfX+halfY*halfY+halfZ*halfZ)+.40f;
     for(int axis=0;axis<2;++axis){float* position=axis==0?lc.light:lc.light2;float* orbitAxis=axis==0?x.orbitAxis1:x.orbitAxis2;float* orbitBasis=axis==0?x.orbitBasis1:x.orbitBasis2;const float direction=axis==0?-1.f:1.f;
-        position[0]=x.orbitCenter[0]+x.orbitRadius*(orbitAxis[0]*std::cos(orbitRadians)+direction*orbitBasis[0]*std::sin(orbitRadians));position[1]=x.orbitCenter[1]+x.orbitRadius*(orbitAxis[1]*std::cos(orbitRadians)+direction*orbitBasis[1]*std::sin(orbitRadians));position[2]=x.orbitCenter[2]+x.orbitRadius*(orbitAxis[2]*std::cos(orbitRadians)+direction*orbitBasis[2]*std::sin(orbitRadians));}
+        position[0]=x.orbitCenter[0]+orbitRadius*(orbitAxis[0]*std::cos(orbitRadians)+direction*orbitBasis[0]*std::sin(orbitRadians));
+        position[1]=x.orbitCenter[1]+orbitRadius*(orbitAxis[1]*std::cos(orbitRadians)+direction*orbitBasis[1]*std::sin(orbitRadians));
+        position[2]=x.orbitCenter[2]+orbitRadius*(orbitAxis[2]*std::cos(orbitRadians)+direction*orbitBasis[2]*std::sin(orbitRadians));
+    }
     lc.intensity=lc.intensity2=44.0f;lc.lightColor[0]=.25f;lc.lightColor[1]=.65f;lc.lightColor[2]=1.f;lc.lightColor2[0]=1.f;lc.lightColor2[1]=.45f;lc.lightColor2[2]=.15f;lc.angularRadius=lc.angularRadius2=.26f;updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
     ID3D11ShaderResourceView* ids=x.idSrv.Get();x.context->CSSetShaderResources(0,1,&ids);ID3D11UnorderedAccessView* vis=x.visibleUav.Get();x.context->CSSetUnorderedAccessViews(0,1,&vis,nullptr);x.context->CSSetShader(x.collectCs.Get(),nullptr,0);x.context->Dispatch((kWidth+7)/8,(kHeight+7)/8,1);
     passTiming.reset();
