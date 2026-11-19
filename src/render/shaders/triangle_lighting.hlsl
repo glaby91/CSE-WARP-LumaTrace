@@ -23,7 +23,7 @@ StructuredBuffer<uint> TriangleOrder : register(t2);
 StructuredBuffer<BvhNode> Bvh : register(t3);
 StructuredBuffer<MaterialData> Materials : register(t4);
 StructuredBuffer<uint> VisibleFlags : register(t5);
-Texture2D<float4> BaseColorMaps[64] : register(t6);
+Texture2DArray<float4> BaseColorMaps : register(t6);
 SamplerState MaterialSampler : register(s0);
 RWStructuredBuffer<uint> OutVisibleFlags : register(u0);
 RWStructuredBuffer<float4> TriangleRadiance : register(u1);
@@ -180,8 +180,8 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
             float2 hitUv = hit.uv0 * reflectionBarycentrics.x
                          + hit.uv1 * reflectionBarycentrics.y
                          + hit.uv2 * reflectionBarycentrics.z;
-            float3 texturedBaseColor = BaseColorMaps[hit.material]
-                                     .SampleLevel(MaterialSampler, hitUv, 0.0).rgb;
+            float3 texturedBaseColor = BaseColorMaps
+                                     .SampleLevel(MaterialSampler, float3(hitUv, float(hit.material)), 0.0).rgb;
             accumulatedReflection += hitMaterial.baseColor.rgb * texturedBaseColor;
         }
         else

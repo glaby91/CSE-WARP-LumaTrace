@@ -26,6 +26,7 @@ namespace {
 using Microsoft::WRL::ComPtr;
 constexpr UINT kWidth = 960, kHeight = 540;
 constexpr UINT kMaxComputeMaterialTextures = 64;
+constexpr UINT kComputeTextureSize = 512;
 constexpr float kPi = 3.14159265358979323846f;
 
 struct GpuVertex { float p[3], n[3], uv[2], tangent[4], color[4]; };
@@ -123,7 +124,7 @@ struct D3D11SceneRenderer::Impl {
     ComPtr<ID3D11Buffer> bvhBuffer, triangleBuffer, orderBuffer, materialBuffer, visibleBuffer, radianceBuffer;
     ComPtr<ID3D11ShaderResourceView> bvhSrv, triangleSrv, orderSrv, materialSrv, visibleSrv, radianceSrv;
     std::vector<Draw> draws; std::vector<std::array<ComPtr<ID3D11ShaderResourceView>,5>> materialTextures;
-    std::array<ComPtr<ID3D11ShaderResourceView>,kMaxComputeMaterialTextures> computeMaterialTextures;
+    ComPtr<ID3D11ShaderResourceView> computeBaseColorArray;
     std::array<ComPtr<ID3D11ShaderResourceView>,5> fallbackTextures;
     std::array<float,16> vp{}; float camera[3]{}; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
     diagnostics::RunLogger* logger=nullptr; QString imageOutputPath;
@@ -137,6 +138,61 @@ struct D3D11SceneRenderer::Impl {
         ComPtr<ID3D11Texture2D> texture;
         if(FAILED(device->CreateTexture2D(&td,&init,&texture))) return false;
         return SUCCEEDED(device->CreateShaderResourceView(texture.Get(),nullptr,&out));
+    }
+
+    bool makeComputeBaseColorArray(const scene::Scene& scene, QString& error) {
+        const UINT layers = UINT(std::max(1, int(scene.materials.size())));
+        std::vector<QImage> images;
+        std::vector<D3D11_SUBRESOURCE_DATA> initial(layers);
+        images.reserve(layers);
+        for (UINT layer = 0; layer < layers; ++layer) {
+            QImage source;
+            if (layer < UINT(scene.materials.size())) {
+                const int textureIndex = scene.materials[int(layer)].baseColorTexture.texture;
+                if (textureIndex >= 0 && textureIndex < scene.textures.size())
+                    source = scene.textures[textureIndex].image;
+            }
+            if (source.isNull()) {
+                source = QImage(1, 1, QImage::Format_RGBA8888);
+                source.fill(QColor(Qt::white));
+            }
+            images.push_back(source.convertToFormat(QImage::Format_RGBA8888)
+                                  .scaled(int(kComputeTextureSize), int(kComputeTextureSize),
+                                          Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+            auto& data = initial[layer];
+            data.pSysMem = images.back().constBits();
+            data.SysMemPitch = UINT(images.back().bytesPerLine());
+            data.SysMemSlicePitch = UINT(images.back().sizeInBytes());
+        }
+
+        D3D11_TEXTURE2D_DESC textureDesc{};
+        textureDesc.Width = kComputeTextureSize;
+        textureDesc.Height = kComputeTextureSize;
+        textureDesc.MipLevels = 1;
+        textureDesc.ArraySize = layers;
+        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+        textureDesc.SampleDesc.Count = 1;
+        textureDesc.Usage = D3D11_USAGE_IMMUTABLE;
+        textureDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        ComPtr<ID3D11Texture2D> texture;
+        if (FAILED(device->CreateTexture2D(&textureDesc, initial.data(), &texture))) {
+            error = QStringLiteral("D3D11 : création du tableau de textures compute impossible.");
+            return false;
+        }
+        D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+        viewDesc.Format = textureDesc.Format;
+        viewDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+        viewDesc.Texture2DArray.MostDetailedMip = 0;
+        viewDesc.Texture2DArray.MipLevels = 1;
+        viewDesc.Texture2DArray.FirstArraySlice = 0;
+        viewDesc.Texture2DArray.ArraySize = layers;
+        if (FAILED(device->CreateShaderResourceView(texture.Get(), &viewDesc, &computeBaseColorArray))) {
+            error = QStringLiteral("D3D11 : vue du tableau de textures compute impossible.");
+            return false;
+        }
+        if (logger) logger->note(QStringLiteral("Tableau baseColor compute : %1 couches de %2×%2.")
+                                     .arg(layers).arg(kComputeTextureSize));
+        return true;
     }
 
     bool createSceneResources(const scene::Scene& scene,const SceneBvh& bvh,QString& error) {
@@ -181,10 +237,8 @@ struct D3D11SceneRenderer::Impl {
                 if(ti>=0&&ti<scene.textures.size()&&!scene.textures[ti].image.isNull()) { if(!makeTexture(scene.textures[ti].image,materialTextures[mi][slot],slot==0||slot==4)) materialTextures[mi][slot]=fallbackTextures[slot]; }
                 else materialTextures[mi][slot]=fallbackTextures[slot];
             }
-            computeMaterialTextures[mi]=materialTextures[mi][0];
         }
-        for(size_t mi=materialTextures.size();mi<computeMaterialTextures.size();++mi)
-            computeMaterialTextures[mi]=fallbackTextures[0];
+        if (!makeComputeBaseColorArray(scene,error)) return false;
         if(logger)logger->note(QStringLiteral("Matériaux GPU : %1 ; textures de scène : %2.").arg(gm.size()).arg(scene.textures.size()));
         uploadTiming.reset();
         if(logger)uploadTiming.emplace(logger->scope(QStringLiteral("GPU upload · vertex/index buffers par primitive")));
@@ -302,12 +356,11 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
     ID3D11ShaderResourceView* nullSrv=nullptr;ID3D11UnorderedAccessView* nullUav=nullptr;x.context->CSSetShaderResources(0,1,&nullSrv);x.context->CSSetUnorderedAccessViews(0,1,&nullUav,nullptr);
     ID3D11ShaderResourceView* computeSrvs[5]={x.triangleSrv.Get(),x.orderSrv.Get(),x.bvhSrv.Get(),x.materialSrv.Get(),x.visibleSrv.Get()};
     x.context->CSSetShaderResources(1,5,computeSrvs);
-    std::array<ID3D11ShaderResourceView*,kMaxComputeMaterialTextures> materialSrvs{};
-    for(size_t mi=0;mi<materialSrvs.size();++mi)materialSrvs[mi]=x.computeMaterialTextures[mi].Get();
-    x.context->CSSetShaderResources(6,kMaxComputeMaterialTextures,materialSrvs.data());
+    ID3D11ShaderResourceView* computeBaseColor=x.computeBaseColorArray.Get();
+    x.context->CSSetShaderResources(6,1,&computeBaseColor);
     ID3D11SamplerState* computeSampler=x.sampler.Get();x.context->CSSetSamplers(0,1,&computeSampler);
     ID3D11UnorderedAccessView* outputs[2]={nullptr,x.radianceUav.Get()};x.context->CSSetUnorderedAccessViews(0,2,outputs,nullptr);x.context->CSSetShader(x.shadeCs.Get(),nullptr,0);x.context->Dispatch((x.triCount+63)/64,1,1);
-    ID3D11SamplerState* nullSampler=nullptr;x.context->CSSetShader(nullptr,nullptr,0);std::array<ID3D11ShaderResourceView*,127> nullComputeSrvs{};x.context->CSSetShaderResources(1,UINT(nullComputeSrvs.size()),nullComputeSrvs.data());x.context->CSSetSamplers(0,1,&nullSampler);x.context->CSSetUnorderedAccessViews(0,2,std::array<ID3D11UnorderedAccessView*,2>{}.data(),nullptr);
+    ID3D11SamplerState* nullSampler=nullptr;x.context->CSSetShader(nullptr,nullptr,0);std::array<ID3D11ShaderResourceView*,6> nullComputeSrvs{};x.context->CSSetShaderResources(1,UINT(nullComputeSrvs.size()),nullComputeSrvs.data());x.context->CSSetSamplers(0,1,&nullSampler);x.context->CSSetUnorderedAccessViews(0,2,std::array<ID3D11UnorderedAccessView*,2>{}.data(),nullptr);
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("raster Direct3D · textures, normales, alpha et affichage")));
     ID3D11RenderTargetView* color=x.backRtv.Get();x.context->OMSetRenderTargets(1,&color,x.depthDsv.Get());x.context->ClearRenderTargetView(x.backRtv.Get(),clear);x.context->OMSetDepthStencilState(x.depthRead.Get(),0);x.context->VSSetShader(x.rasterVs.Get(),nullptr,0);x.context->PSSetShader(x.rasterPs.Get(),nullptr,0);ID3D11ShaderResourceView* lightSrv=x.radianceSrv.Get();x.context->PSSetShaderResources(5,1,&lightSrv);ID3D11SamplerState* samp=x.sampler.Get();x.context->PSSetSamplers(0,1,&samp);
