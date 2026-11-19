@@ -111,6 +111,40 @@ bool TraceScene(float3 origin, float3 direction, float maxDistance, uint sourceT
     return hitTriangle != 0xffffffff;
 }
 
+// Shadow rays only need to know whether any blocker exists. Stop on the first
+// triangle hit instead of traversing the rest of the BVH to find the closest.
+bool TraceAny(float3 origin, float3 direction, float maxDistance, uint sourceTriangle)
+{
+    uint stack[64]; uint top = 0; stack[top++] = 0;
+    float3 safeDirection = float3(
+        abs(direction.x) < 1.e-8 ? (direction.x < 0.0 ? -1.e-8 : 1.e-8) : direction.x,
+        abs(direction.y) < 1.e-8 ? (direction.y < 0.0 ? -1.e-8 : 1.e-8) : direction.y,
+        abs(direction.z) < 1.e-8 ? (direction.z < 0.0 ? -1.e-8 : 1.e-8) : direction.z);
+    float3 invDir = rcp(safeDirection);
+    [loop] while (top > 0)
+    {
+        uint nodeIndex = stack[--top];
+        BvhNode node = Bvh[nodeIndex];
+        if (!HitBounds(node, origin, invDir, maxDistance)) continue;
+        if (node.triangleCount > 0)
+        {
+            [loop] for (uint j = 0; j < node.triangleCount; ++j)
+            {
+                uint id = TriangleOrder[node.firstTriangle + j];
+                if (id == sourceTriangle) continue;
+                float hitT;
+                if (HitTriangle(Triangles[id], origin, direction, maxDistance, hitT)) return true;
+            }
+        }
+        else if (top < 62)
+        {
+            stack[top++] = node.rightChild;
+            stack[top++] = node.leftChild;
+        }
+    }
+    return false;
+}
+
 float Hash1(uint v)
 {
     v ^= v >> 16; v *= 0x7feb352d; v ^= v >> 15; v *= 0x846ca68b; v ^= v >> 16;
@@ -160,8 +194,7 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
         float3 lightVector = lightSamplePosition - p;
         float lightDistance = length(lightVector);
         float3 toLight = lightVector / max(lightDistance, RayEpsilon);
-        uint shadowHit; float shadowT;
-        bool occluded = TraceScene(p + n*RayEpsilon, toLight, max(lightDistance-RayEpsilon,RayEpsilon), triangleId, shadowHit, shadowT);
+        bool occluded = TraceAny(p + n*RayEpsilon, toLight, max(lightDistance-RayEpsilon,RayEpsilon), triangleId);
         float visible = occluded ? 0.0 : 1.0;
         // Store ray visibility/intensity only; raster applies its per-pixel
         // (normal-map-aware) Lambert term to avoid multiplying N.L twice.
