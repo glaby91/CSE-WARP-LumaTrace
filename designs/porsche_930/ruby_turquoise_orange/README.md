@@ -13,7 +13,7 @@ Texture de carrosserie autonome pour le modèle Porsche 930 livré avec LumaTrac
 
 Ajouter cette image comme `pbrMetallicRoughness.baseColorTexture` du matériau `paint`, avec `texCoord: 0`. Mettre alors `baseColorFactor` à `[1, 1, 1, 1]` afin que le facteur gris foncé d'origine ne ternisse pas les couleurs. Conserver ses facteurs métalliques, de rugosité et extensions.
 
-Le shader raster de LumaTrace lit la texture de couleur de base. Le calcul de réflexion par rayons utilise actuellement le facteur de couleur du matériau et ne consulte pas cette texture ; son adaptation devra rester une étape distincte si l'on veut que les reflets reprennent aussi la livrée.
+Le rendu raster et le calcul des reflets par rayons lisent maintenant la texture de couleur de base lorsqu'elle est assignée. Le calcul des rayons utilise les UV interpolées au point d'impact et accepte jusqu'à 64 matériaux. Le traitement de l'alpha des surfaces touchées par les rayons reste à étudier.
 
 ## Régénération
 

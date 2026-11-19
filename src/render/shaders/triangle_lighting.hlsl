@@ -23,6 +23,8 @@ StructuredBuffer<uint> TriangleOrder : register(t2);
 StructuredBuffer<BvhNode> Bvh : register(t3);
 StructuredBuffer<MaterialData> Materials : register(t4);
 StructuredBuffer<uint> VisibleFlags : register(t5);
+Texture2D<float4> BaseColorMaps[64] : register(t6);
+SamplerState MaterialSampler : register(s0);
 RWStructuredBuffer<uint> OutVisibleFlags : register(u0);
 RWStructuredBuffer<float4> TriangleRadiance : register(u1);
 
@@ -59,8 +61,10 @@ bool HitBounds(BvhNode node, float3 origin, float3 inverseDirection, float maxDi
     return farT >= nearT;
 }
 
-bool HitTriangle(Triangle tri, float3 origin, float3 direction, float maxDistance, out float hitT)
+bool HitTriangle(Triangle tri, float3 origin, float3 direction, float maxDistance,
+                 out float hitT, out float3 barycentrics)
 {
+    barycentrics = 0.0;
     float3 e1 = tri.p1 - tri.p0, e2 = tri.p2 - tri.p0;
     float3 p = cross(direction, e2);
     float determinant = dot(e1, p);
@@ -73,11 +77,13 @@ bool HitTriangle(Triangle tri, float3 origin, float3 direction, float maxDistanc
     float v = dot(direction, q) * invDet;
     if (v < 0.0 || u + v > 1.0) { hitT = maxDistance; return false; }
     hitT = dot(e2, q) * invDet;
-    return hitT > RayEpsilon && hitT < maxDistance;
+    if (hitT <= RayEpsilon || hitT >= maxDistance) return false;
+    barycentrics = float3(1.0 - u - v, u, v);
+    return true;
 }
 
 bool TraceScene(float3 origin, float3 direction, float maxDistance, uint sourceTriangle,
-                out uint hitTriangle, out float hitDistance)
+                out uint hitTriangle, out float hitDistance, out float3 hitBarycentrics)
 {
     uint stack[64]; uint top = 0; stack[top++] = 0;
     float3 safeDirection = float3(
@@ -85,7 +91,7 @@ bool TraceScene(float3 origin, float3 direction, float maxDistance, uint sourceT
         abs(direction.y) < 1.e-8 ? (direction.y < 0.0 ? -1.e-8 : 1.e-8) : direction.y,
         abs(direction.z) < 1.e-8 ? (direction.z < 0.0 ? -1.e-8 : 1.e-8) : direction.z);
     float3 invDir = rcp(safeDirection);
-    hitTriangle = 0xffffffff; hitDistance = maxDistance;
+    hitTriangle = 0xffffffff; hitDistance = maxDistance; hitBarycentrics = 0.0;
     [loop] while (top > 0)
     {
         uint nodeIndex = stack[--top];
@@ -97,9 +103,9 @@ bool TraceScene(float3 origin, float3 direction, float maxDistance, uint sourceT
             {
                 uint id = TriangleOrder[node.firstTriangle + j];
                 if (id == sourceTriangle) continue;
-                float t;
-                if (HitTriangle(Triangles[id], origin, direction, hitDistance, t))
-                { hitDistance = t; hitTriangle = id; }
+                float t; float3 barycentrics;
+                if (HitTriangle(Triangles[id], origin, direction, hitDistance, t, barycentrics))
+                { hitDistance = t; hitTriangle = id; hitBarycentrics = barycentrics; }
             }
         }
         else if (top < 62)
@@ -155,8 +161,9 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
         float2 lightSample = SampleAreaLight(sampleIndex, samples);
         float3 toLight = normalize(KeyLightDirection + LightAngularRadius *
             (lightRight * lightSample.x + lightUp * lightSample.y));
-        uint shadowHit; float shadowT;
-        bool occluded = TraceScene(p + n*RayEpsilon, toLight, 10000.0, triangleId, shadowHit, shadowT);
+        uint shadowHit; float shadowT; float3 shadowBarycentrics;
+        bool occluded = TraceScene(p + n*RayEpsilon, toLight, 10000.0, triangleId,
+                                   shadowHit, shadowT, shadowBarycentrics);
         float visible = occluded ? 0.0 : 1.0;
         // Store ray visibility/intensity only; raster applies its per-pixel
         // (normal-map-aware) Lambert term to avoid multiplying N.L twice.
@@ -164,11 +171,18 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
 
         float3 viewDirection = normalize(CameraPosition - p);
         float3 reflectionDirection = reflect(-viewDirection,n);
-        uint reflectionHit; float reflectionT;
-        if (TraceScene(p+n*RayEpsilon,reflectionDirection,10000.0,triangleId,reflectionHit,reflectionT))
+        uint reflectionHit; float reflectionT; float3 reflectionBarycentrics;
+        if (TraceScene(p+n*RayEpsilon,reflectionDirection,10000.0,triangleId,
+                       reflectionHit,reflectionT,reflectionBarycentrics))
         {
-            MaterialData hitMaterial = Materials[Triangles[reflectionHit].material];
-            accumulatedReflection += hitMaterial.baseColor.rgb;
+            Triangle hit = Triangles[reflectionHit];
+            MaterialData hitMaterial = Materials[hit.material];
+            float2 hitUv = hit.uv0 * reflectionBarycentrics.x
+                         + hit.uv1 * reflectionBarycentrics.y
+                         + hit.uv2 * reflectionBarycentrics.z;
+            float3 texturedBaseColor = BaseColorMaps[hit.material]
+                                     .SampleLevel(MaterialSampler, hitUv, 0.0).rgb;
+            accumulatedReflection += hitMaterial.baseColor.rgb * texturedBaseColor;
         }
         else
         {

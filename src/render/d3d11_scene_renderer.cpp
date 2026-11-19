@@ -25,6 +25,7 @@ namespace lumatrace::render {
 namespace {
 using Microsoft::WRL::ComPtr;
 constexpr UINT kWidth = 960, kHeight = 540;
+constexpr UINT kMaxComputeMaterialTextures = 64;
 constexpr float kPi = 3.14159265358979323846f;
 
 struct GpuVertex { float p[3], n[3], uv[2], tangent[4], color[4]; };
@@ -122,6 +123,7 @@ struct D3D11SceneRenderer::Impl {
     ComPtr<ID3D11Buffer> bvhBuffer, triangleBuffer, orderBuffer, materialBuffer, visibleBuffer, radianceBuffer;
     ComPtr<ID3D11ShaderResourceView> bvhSrv, triangleSrv, orderSrv, materialSrv, visibleSrv, radianceSrv;
     std::vector<Draw> draws; std::vector<std::array<ComPtr<ID3D11ShaderResourceView>,5>> materialTextures;
+    std::array<ComPtr<ID3D11ShaderResourceView>,kMaxComputeMaterialTextures> computeMaterialTextures;
     std::array<ComPtr<ID3D11ShaderResourceView>,5> fallbackTextures;
     std::array<float,16> vp{}; float camera[3]{}; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
     diagnostics::RunLogger* logger=nullptr; QString imageOutputPath;
@@ -139,6 +141,10 @@ struct D3D11SceneRenderer::Impl {
 
     bool createSceneResources(const scene::Scene& scene,const SceneBvh& bvh,QString& error) {
         if(bvh.triangles.empty() || bvh.nodes.empty()) { error=QStringLiteral("La scène ne contient aucun triangle exploitable."); return false; }
+        if(scene.materials.size() > int(kMaxComputeMaterialTextures)) {
+            error=QStringLiteral("Le raytracing de couleur accepte au maximum %1 matériaux.").arg(kMaxComputeMaterialTextures);
+            return false;
+        }
         triCount=UINT(bvh.triangles.size());
         std::optional<diagnostics::RunLogger::Scope> uploadTiming;
         if(logger)uploadTiming.emplace(logger->scope(QStringLiteral("GPU upload · triangles et BVH")));
@@ -175,7 +181,10 @@ struct D3D11SceneRenderer::Impl {
                 if(ti>=0&&ti<scene.textures.size()&&!scene.textures[ti].image.isNull()) { if(!makeTexture(scene.textures[ti].image,materialTextures[mi][slot],slot==0||slot==4)) materialTextures[mi][slot]=fallbackTextures[slot]; }
                 else materialTextures[mi][slot]=fallbackTextures[slot];
             }
+            computeMaterialTextures[mi]=materialTextures[mi][0];
         }
+        for(size_t mi=materialTextures.size();mi<computeMaterialTextures.size();++mi)
+            computeMaterialTextures[mi]=fallbackTextures[0];
         if(logger)logger->note(QStringLiteral("Matériaux GPU : %1 ; textures de scène : %2.").arg(gm.size()).arg(scene.textures.size()));
         uploadTiming.reset();
         if(logger)uploadTiming.emplace(logger->scope(QStringLiteral("GPU upload · vertex/index buffers par primitive")));
@@ -289,8 +298,14 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · rayons d'ombre/réflexion et parcours BVH")));
     ID3D11ShaderResourceView* nullSrv=nullptr;ID3D11UnorderedAccessView* nullUav=nullptr;x.context->CSSetShaderResources(0,1,&nullSrv);x.context->CSSetUnorderedAccessViews(0,1,&nullUav,nullptr);
-    ID3D11ShaderResourceView* computeSrvs[6]={nullptr,x.triangleSrv.Get(),x.orderSrv.Get(),x.bvhSrv.Get(),x.materialSrv.Get(),x.visibleSrv.Get()};x.context->CSSetShaderResources(1,6,computeSrvs);ID3D11UnorderedAccessView* outputs[2]={nullptr,x.radianceUav.Get()};x.context->CSSetUnorderedAccessViews(0,2,outputs,nullptr);x.context->CSSetShader(x.shadeCs.Get(),nullptr,0);x.context->Dispatch((x.triCount+63)/64,1,1);
-    x.context->CSSetShader(nullptr,nullptr,0);x.context->CSSetShaderResources(1,6,std::array<ID3D11ShaderResourceView*,6>{}.data());x.context->CSSetUnorderedAccessViews(0,2,std::array<ID3D11UnorderedAccessView*,2>{}.data(),nullptr);
+    ID3D11ShaderResourceView* computeSrvs[5]={x.triangleSrv.Get(),x.orderSrv.Get(),x.bvhSrv.Get(),x.materialSrv.Get(),x.visibleSrv.Get()};
+    x.context->CSSetShaderResources(1,5,computeSrvs);
+    std::array<ID3D11ShaderResourceView*,kMaxComputeMaterialTextures> materialSrvs{};
+    for(size_t mi=0;mi<materialSrvs.size();++mi)materialSrvs[mi]=x.computeMaterialTextures[mi].Get();
+    x.context->CSSetShaderResources(6,kMaxComputeMaterialTextures,materialSrvs.data());
+    ID3D11SamplerState* computeSampler=x.sampler.Get();x.context->CSSetSamplers(0,1,&computeSampler);
+    ID3D11UnorderedAccessView* outputs[2]={nullptr,x.radianceUav.Get()};x.context->CSSetUnorderedAccessViews(0,2,outputs,nullptr);x.context->CSSetShader(x.shadeCs.Get(),nullptr,0);x.context->Dispatch((x.triCount+63)/64,1,1);
+    ID3D11SamplerState* nullSampler=nullptr;x.context->CSSetShader(nullptr,nullptr,0);std::array<ID3D11ShaderResourceView*,127> nullComputeSrvs{};x.context->CSSetShaderResources(1,UINT(nullComputeSrvs.size()),nullComputeSrvs.data());x.context->CSSetSamplers(0,1,&nullSampler);x.context->CSSetUnorderedAccessViews(0,2,std::array<ID3D11UnorderedAccessView*,2>{}.data(),nullptr);
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("raster Direct3D · textures, normales, alpha et affichage")));
     ID3D11RenderTargetView* color=x.backRtv.Get();x.context->OMSetRenderTargets(1,&color,x.depthDsv.Get());x.context->ClearRenderTargetView(x.backRtv.Get(),clear);x.context->OMSetDepthStencilState(x.depthRead.Get(),0);x.context->VSSetShader(x.rasterVs.Get(),nullptr,0);x.context->PSSetShader(x.rasterPs.Get(),nullptr,0);ID3D11ShaderResourceView* lightSrv=x.radianceSrv.Get();x.context->PSSetShaderResources(5,1,&lightSrv);ID3D11SamplerState* samp=x.sampler.Get();x.context->PSSetSamplers(0,1,&samp);
