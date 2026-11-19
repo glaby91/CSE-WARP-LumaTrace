@@ -10,3 +10,7 @@ Prototype expérimental de rendu DirectX 11 / HLSL autour de l'éclairage évalu
 - Calculs GPU via HLSL, avec BVH préparé côté CPU si nécessaire.
 
 Ce dépôt démarre comme espace de travail de conception ; aucune intégration au moteur CSE WARP n'est encore réalisée.
+
+## Ressource de livrée
+
+Une texture de carrosserie autonome pour la Porsche 930 est préparée dans [designs/porsche_930/ruby_turquoise_orange](designs/porsche_930/ruby_turquoise_orange/). Elle cible le matériau glTF `paint` et son UV `TEXCOORD_0`. Elle n'est pas appliquée au modèle ni au rendu ; voir son README pour les paramètres de raccordement ultérieur.
