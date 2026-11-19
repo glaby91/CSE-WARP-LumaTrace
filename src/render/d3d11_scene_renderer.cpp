@@ -123,7 +123,7 @@ struct D3D11SceneRenderer::Impl {
     ComPtr<ID3D11ShaderResourceView> bvhSrv, triangleSrv, orderSrv, materialSrv, visibleSrv, radianceSrv;
     std::vector<Draw> draws; std::vector<std::array<ComPtr<ID3D11ShaderResourceView>,5>> materialTextures;
     std::array<ComPtr<ID3D11ShaderResourceView>,5> fallbackTextures;
-    std::array<float,16> vp{}; float camera[3]{}; float lightPosition[3]{}, lightRadius=0.f; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
+    std::array<float,16> vp{}; float camera[3]{}; float lightPosition[3]{}, lightRadius=0.f, rayEpsilon=1.e-4f; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
     diagnostics::RunLogger* logger=nullptr; QString imageOutputPath;
 
     bool makeTexture(const QImage& source, ComPtr<ID3D11ShaderResourceView>& out, bool srgb=false) {
@@ -259,6 +259,7 @@ bool D3D11SceneRenderer::initialize(HWND hwnd,const scene::Scene& scene,const Sc
     const scene::Vec3 center=scene.bounds.valid?scene::Vec3{(scene.bounds.minimum.x+scene.bounds.maximum.x)*.5f,(scene.bounds.minimum.y+scene.bounds.maximum.y)*.5f,(scene.bounds.minimum.z+scene.bounds.maximum.z)*.5f}:scene::Vec3{};
     const float dx=scene.bounds.maximum.x-scene.bounds.minimum.x,dy=scene.bounds.maximum.y-scene.bounds.minimum.y,dz=scene.bounds.maximum.z-scene.bounds.minimum.z;
     const float sceneRadius=std::max(1.f,std::sqrt(dx*dx+dy*dy+dz*dz)*.5f);
+    x.rayEpsilon=std::max(1.e-4f,std::sqrt(std::pow(dx,2.f)+std::pow(dy,2.f)+std::pow(dz,2.f))*1.e-5f);
     float lightDirection[3]={-.45f,.82f,.34f};normalize(lightDirection[0],lightDirection[1],lightDirection[2]);
     x.lightPosition[0]=center.x+lightDirection[0]*3.2f*sceneRadius;x.lightPosition[1]=center.y+lightDirection[1]*3.2f*sceneRadius;x.lightPosition[2]=center.z+lightDirection[2]*3.2f*sceneRadius;
     x.lightRadius=sceneRadius*.65f;x.ready=true;
@@ -293,7 +294,7 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · marquage des triangles visibles")));
     x.context->ClearUnorderedAccessViewUint(x.visibleUav.Get(),zero);
-    LightConstants lc{};lc.width=kWidth;lc.height=kHeight;lc.triangleCount=x.triCount;lc.samples=x.samples;lc.camera[0]=x.camera[0];lc.camera[1]=x.camera[1];lc.camera[2]=x.camera[2];lc.epsilon=std::max(1.e-4f,std::sqrt(std::pow(scene.bounds.maximum.x-scene.bounds.minimum.x,2.f)+std::pow(scene.bounds.maximum.y-scene.bounds.minimum.y,2.f)+std::pow(scene.bounds.maximum.z-scene.bounds.minimum.z,2.f))*1.e-5f);std::copy(std::begin(x.lightPosition),std::end(x.lightPosition),lc.lightPosition);lc.intensity=1.8f;lc.lightColor[0]=1.f;lc.lightColor[1]=.93f;lc.lightColor[2]=.82f;lc.lightRadius=x.lightRadius;updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
+    LightConstants lc{};lc.width=kWidth;lc.height=kHeight;lc.triangleCount=x.triCount;lc.samples=x.samples;lc.camera[0]=x.camera[0];lc.camera[1]=x.camera[1];lc.camera[2]=x.camera[2];lc.epsilon=x.rayEpsilon;std::copy(std::begin(x.lightPosition),std::end(x.lightPosition),lc.lightPosition);lc.intensity=1.8f;lc.lightColor[0]=1.f;lc.lightColor[1]=.93f;lc.lightColor[2]=.82f;lc.lightRadius=x.lightRadius;updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
     ID3D11ShaderResourceView* ids=x.idSrv.Get();x.context->CSSetShaderResources(0,1,&ids);ID3D11UnorderedAccessView* vis=x.visibleUav.Get();x.context->CSSetUnorderedAccessViews(0,1,&vis,nullptr);x.context->CSSetShader(x.collectCs.Get(),nullptr,0);x.context->Dispatch((kWidth+7)/8,(kHeight+7)/8,1);
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · rayons d'ombre/réflexion et parcours BVH")));
