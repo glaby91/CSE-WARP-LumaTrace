@@ -89,7 +89,7 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
         float z = input.worldPosition.z;
         float y = input.worldPosition.y;
         float bodySpan = smoothstep(-2.62, -2.42, z) * (1.0 - smoothstep(2.32, 2.52, z));
-        float pinLine = 1.0 - smoothstep(0.018, 0.038, abs(y - (1.17 + 0.025 * sin(z * 1.2)));
+        float pinLine = 1.0 - smoothstep(0.018, 0.038, abs(y - (1.17 + 0.025 * sin(z * 1.2))));
         float slashCoord = y - (0.48 + 0.105 * (z + 2.4));
         float graphiteBand = 1.0 - smoothstep(0.045, 0.075, abs(slashCoord));
         float silverBand = 1.0 - smoothstep(0.026, 0.048, abs(slashCoord - 0.085));
