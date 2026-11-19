@@ -24,6 +24,8 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - name: Report scene asset hydration
         shell: pwsh
         run: |
@@ -62,6 +64,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "CSShadeVisibleTriangles HLSL compilation failed: $LASTEXITCODE" }
       - name: Deploy Qt runtime beside the executable
         run: windeployqt --release --no-translations build/Release/CSE_WARP_LumaTrace.exe
+      - name: Verify packaged Porsche 930 scene
+        shell: pwsh
+        run: |
+          $sceneRoot = 'build/Release/assets/vehicles/porsche_930/scene'
+          $glb = Join-Path $sceneRoot 'porsche_930.glb'
+          $manifest = Join-Path $sceneRoot 'scene.json'
+          $textures = Join-Path $sceneRoot 'textures'
+          if (-not (Test-Path $manifest)) { throw "Scene manifest missing from package: $manifest" }
+          if (-not (Test-Path $glb)) { throw "Porsche GLB missing from package: $glb" }
+          $glbBytes = [System.IO.File]::ReadAllBytes((Resolve-Path $glb).Path)
+          if ($glbBytes.Length -lt 12 -or [System.Text.Encoding]::ASCII.GetString($glbBytes, 0, 4) -ne 'glTF') {
+            throw 'Packaged Porsche GLB is missing or still a Git LFS pointer.'
+          }
+          $textureFiles = @(Get-ChildItem $textures -Filter '*.png' -File)
+          if ($textureFiles.Count -ne 27) { throw "Expected 27 Porsche textures in package; found $($textureFiles.Count)." }
+          foreach ($texture in $textureFiles) {
+            $bytes = [System.IO.File]::ReadAllBytes($texture.FullName)
+            if ($bytes.Length -lt 8 -or [Convert]::ToBase64String($bytes[0..7]) -ne 'iVBORw0KGgo=') {
+              throw "Invalid or unhydrated PNG texture in package: $($texture.Name)"
+            }
+          }
+          Write-Host "Verified packaged Porsche scene: $($glbBytes.Length) GLB bytes and $($textureFiles.Count) PNG textures."
       - name: Capture WARP renders for 1, 2 and 4 samples
         shell: pwsh
         run: |
