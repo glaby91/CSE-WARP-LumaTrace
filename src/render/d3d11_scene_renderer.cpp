@@ -36,6 +36,13 @@ struct alignas(16) PrepassCamera { float vp[16]; float world[16]; std::uint32_t 
 struct alignas(16) MaterialConstants { float baseColor[4], surface[4], emissive[4], details[4]; std::uint32_t triangleBase, padding[3]; };
 struct alignas(16) LightConstants { std::uint32_t width, height, triangleCount, samples; float camera[3], epsilon; float light[3], intensity; float lightColor[3], angularRadius; };
 static_assert(sizeof(LightConstants) == 64);
+struct alignas(16) FocusedSpotConstants {
+    float position[3], intensity;
+    float direction[3], range;
+    float color[3], innerCos;
+    float outerCos, padding[3];
+};
+static_assert(sizeof(FocusedSpotConstants) == 64);
 struct GpuMaterial { float baseColor[4]; float metallic, roughness; float pad[2]; };
 
 template<class T> bool makeBuffer(ID3D11Device* d, UINT bind, UINT misc, UINT stride, const T* data, size_t count, ComPtr<ID3D11Buffer>& out) {
@@ -90,11 +97,13 @@ void normalize(float& x,float& y,float& z) { const float l=std::sqrt(x*x+y*y+z*z
 
 // Row-vector view-projection, Direct3D depth range [0,1].
 std::array<float,16> cameraMatrix(const scene::Bounds& bounds, float camera[3]) {
-    const scene::Vec3 center = bounds.valid ? scene::Vec3{(bounds.minimum.x+bounds.maximum.x)*.5f,(bounds.minimum.y+bounds.maximum.y)*.5f,(bounds.minimum.z+bounds.maximum.z)*.5f} : scene::Vec3{};
+    scene::Vec3 center = bounds.valid ? scene::Vec3{(bounds.minimum.x+bounds.maximum.x)*.5f,(bounds.minimum.y+bounds.maximum.y)*.5f,(bounds.minimum.z+bounds.maximum.z)*.5f} : scene::Vec3{};
     const float dx=bounds.maximum.x-bounds.minimum.x, dy=bounds.maximum.y-bounds.minimum.y, dz=bounds.maximum.z-bounds.minimum.z;
     const float radius=std::max(1.f,std::sqrt(dx*dx+dy*dy+dz*dz)*.5f);
+    // Lift the subject slightly in frame and move the camera closer for a larger car.
+    center.y -= radius*.12f;
     float fx=.85f, fy=.48f, fz=1.f; normalize(fx,fy,fz);
-    camera[0]=center.x+fx*radius*2.0f; camera[1]=center.y+fy*radius*2.0f; camera[2]=center.z+fz*radius*2.0f;
+    camera[0]=center.x+fx*radius*1.5f; camera[1]=center.y+fy*radius*1.5f; camera[2]=center.z+fz*radius*1.5f;
     float zx=center.x-camera[0], zy=center.y-camera[1], zz=center.z-camera[2]; normalize(zx,zy,zz);
     float xx=zz, xy=0.f, xz=-zx; normalize(xx,xy,xz);
     const float yx=zy*xz-zz*xy, yy=zz*xx-zx*xz, yz=zx*xy-zy*xx;
@@ -109,6 +118,30 @@ std::array<float,16> cameraMatrix(const scene::Bounds& bounds, float camera[3]) 
     for(int r=0;r<4;++r)for(int c=0;c<4;++c)for(int k=0;k<4;++k)out[r*4+c]+=v[r*4+k]*p[k*4+c];
     return out;
 }
+FocusedSpotConstants focusedSpotForBounds(const scene::Bounds& bounds) {
+    const scene::Vec3 center = bounds.valid ? scene::Vec3{(bounds.minimum.x+bounds.maximum.x)*.5f,(bounds.minimum.y+bounds.maximum.y)*.5f,(bounds.minimum.z+bounds.maximum.z)*.5f} : scene::Vec3{};
+    const float dx=bounds.maximum.x-bounds.minimum.x, dy=bounds.maximum.y-bounds.minimum.y, dz=bounds.maximum.z-bounds.minimum.z;
+    const float radius=std::max(1.f,std::sqrt(dx*dx+dy*dy+dz*dz)*.5f);
+    float cameraX=.85f,cameraY=.48f,cameraZ=1.f;normalize(cameraX,cameraY,cameraZ);
+    float rightX=-cameraZ,rightZ=cameraX;
+    const float rightLength=std::sqrt(rightX*rightX+rightZ*rightZ);
+    if(rightLength>1.e-8f){rightX/=rightLength;rightZ/=rightLength;}
+    // Place a soft studio spot above the camera-facing hood/front quarter.
+    const float targetX=center.x+rightX*radius*.28f,targetY=center.y,targetZ=center.z+rightZ*radius*.28f;
+    FocusedSpotConstants spot{};
+    spot.position[0]=center.x+cameraX*radius*.90f;
+    spot.position[1]=center.y+radius*1.45f;
+    spot.position[2]=center.z+cameraZ*radius*.90f;
+    spot.direction[0]=targetX-spot.position[0];
+    spot.direction[1]=targetY-spot.position[1];
+    spot.direction[2]=targetZ-spot.position[2];
+    normalize(spot.direction[0],spot.direction[1],spot.direction[2]);
+    spot.intensity=7.0f;
+    spot.range=radius*3.6f;
+    spot.color[0]=1.0f;spot.color[1]=.93f;spot.color[2]=.82f;
+    spot.innerCos=.88f;spot.outerCos=.62f;
+    return spot;
+}
 }
 
 struct D3D11SceneRenderer::Impl {
@@ -120,7 +153,7 @@ struct D3D11SceneRenderer::Impl {
     ComPtr<ID3D11BlendState> alphaBlend; ComPtr<ID3D11RasterizerState> rasterState, rasterDoubleSided;
     ComPtr<ID3D11VertexShader> preVs, rasterVs; ComPtr<ID3D11PixelShader> prePs, rasterPs;
     ComPtr<ID3D11ComputeShader> collectCs, shadeCs; ComPtr<ID3D11InputLayout> inputLayout;
-    ComPtr<ID3D11SamplerState> sampler; ComPtr<ID3D11Buffer> preCameraCb, rasterCameraCb, materialCb, lightCb;
+    ComPtr<ID3D11SamplerState> sampler; ComPtr<ID3D11Buffer> preCameraCb, rasterCameraCb, materialCb, lightCb, focusedSpotCb;
     ComPtr<ID3D11Buffer> bvhBuffer, triangleBuffer, orderBuffer, materialBuffer, visibleBuffer, radianceBuffer;
     ComPtr<ID3D11ShaderResourceView> bvhSrv, triangleSrv, orderSrv, materialSrv, visibleSrv, radianceSrv;
     std::vector<Draw> draws; std::vector<std::array<ComPtr<ID3D11ShaderResourceView>,5>> materialTextures;
@@ -286,7 +319,7 @@ struct D3D11SceneRenderer::Impl {
         if(!compileShader(L"raster_pbr.hlsl","PSMain","ps_5_0",ps,error,logger)||FAILED(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,&rasterPs))){if(error.isEmpty())error=QStringLiteral("D3D11 : création pixel shader raster impossible.");return false;}
         if(!compileShader(L"triangle_lighting.hlsl","CSCollectVisible","cs_5_0",cs,error,logger)||FAILED(device->CreateComputeShader(cs->GetBufferPointer(),cs->GetBufferSize(),nullptr,&collectCs))){if(error.isEmpty())error=QStringLiteral("D3D11 : création compute collect impossible.");return false;}
         if(!compileShader(L"triangle_lighting.hlsl","CSShadeVisibleTriangles","cs_5_0",cs,error,logger)||FAILED(device->CreateComputeShader(cs->GetBufferPointer(),cs->GetBufferSize(),nullptr,&shadeCs))){if(error.isEmpty())error=QStringLiteral("D3D11 : création compute lumière impossible.");return false;}
-        if(!makeConstantBuffer(device.Get(),sizeof(PrepassCamera),preCameraCb)||!makeConstantBuffer(device.Get(),sizeof(RasterCamera),rasterCameraCb)||!makeConstantBuffer(device.Get(),sizeof(MaterialConstants),materialCb)||!makeConstantBuffer(device.Get(),sizeof(LightConstants),lightCb)){error=QStringLiteral("D3D11 : allocations de constantes impossibles.");return false;}
+        if(!makeConstantBuffer(device.Get(),sizeof(PrepassCamera),preCameraCb)||!makeConstantBuffer(device.Get(),sizeof(RasterCamera),rasterCameraCb)||!makeConstantBuffer(device.Get(),sizeof(MaterialConstants),materialCb)||!makeConstantBuffer(device.Get(),sizeof(LightConstants),lightCb)||!makeConstantBuffer(device.Get(),sizeof(FocusedSpotConstants),focusedSpotCb)){error=QStringLiteral("D3D11 : allocations de constantes impossibles.");return false;}
         D3D11_SAMPLER_DESC ss{};ss.Filter=D3D11_FILTER_ANISOTROPIC;ss.MaxAnisotropy=4;ss.AddressU=ss.AddressV=ss.AddressW=D3D11_TEXTURE_ADDRESS_WRAP;ss.MaxLOD=D3D11_FLOAT32_MAX;
         if(FAILED(device->CreateSamplerState(&ss,&sampler))){error=QStringLiteral("D3D11 : sampler impossible.");return false;}
         D3D11_DEPTH_STENCIL_DESC ds{};ds.DepthEnable=TRUE;ds.DepthWriteMask=D3D11_DEPTH_WRITE_MASK_ALL;ds.DepthFunc=D3D11_COMPARISON_LESS_EQUAL;ds.StencilEnable=FALSE;
@@ -363,7 +396,7 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
     ID3D11SamplerState* nullSampler=nullptr;x.context->CSSetShader(nullptr,nullptr,0);std::array<ID3D11ShaderResourceView*,6> nullComputeSrvs{};x.context->CSSetShaderResources(1,UINT(nullComputeSrvs.size()),nullComputeSrvs.data());x.context->CSSetSamplers(0,1,&nullSampler);x.context->CSSetUnorderedAccessViews(0,2,std::array<ID3D11UnorderedAccessView*,2>{}.data(),nullptr);
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("raster Direct3D · textures, normales, alpha et affichage")));
-    ID3D11RenderTargetView* color=x.backRtv.Get();x.context->OMSetRenderTargets(1,&color,x.depthDsv.Get());x.context->ClearRenderTargetView(x.backRtv.Get(),clear);x.context->OMSetDepthStencilState(x.depthRead.Get(),0);x.context->VSSetShader(x.rasterVs.Get(),nullptr,0);x.context->PSSetShader(x.rasterPs.Get(),nullptr,0);ID3D11ShaderResourceView* lightSrv=x.radianceSrv.Get();x.context->PSSetShaderResources(5,1,&lightSrv);ID3D11SamplerState* samp=x.sampler.Get();x.context->PSSetSamplers(0,1,&samp);
+    ID3D11RenderTargetView* color=x.backRtv.Get();x.context->OMSetRenderTargets(1,&color,x.depthDsv.Get());x.context->ClearRenderTargetView(x.backRtv.Get(),clear);x.context->OMSetDepthStencilState(x.depthRead.Get(),0);x.context->VSSetShader(x.rasterVs.Get(),nullptr,0);x.context->PSSetShader(x.rasterPs.Get(),nullptr,0);ID3D11ShaderResourceView* lightSrv=x.radianceSrv.Get();x.context->PSSetShaderResources(5,1,&lightSrv);ID3D11Buffer* focusedSpot=x.focusedSpotCb.Get();x.context->PSSetConstantBuffers(2,1,&focusedSpot);ID3D11SamplerState* samp=x.sampler.Get();x.context->PSSetSamplers(0,1,&samp);
     for(size_t i=0;i<scene.primitives.size()&&i<x.draws.size();++i){const auto& p=scene.primitives[int(i)];const auto& d=x.draws[i];if(!d.vb||!d.ib)continue;const int mi=d.material;const scene::Material* m=mi>=0?&scene.materials[mi]:nullptr;x.context->RSSetState(m&&m->doubleSided?x.rasterDoubleSided.Get():x.rasterState.Get());RasterCamera rc{};std::copy(x.vp.begin(),x.vp.end(),rc.vp);std::copy(p.worldTransform.begin(),p.worldTransform.end(),rc.world);const auto nm=normalMatrix(p.worldTransform);std::copy(nm.begin(),nm.end(),rc.normalWorld);rc.camera[0]=x.camera[0];rc.camera[1]=x.camera[1];rc.camera[2]=x.camera[2];rc.camera[3]=1;updateBuffer(x.context.Get(),x.rasterCameraCb.Get(),rc);ID3D11Buffer* cb=x.rasterCameraCb.Get();x.context->VSSetConstantBuffers(0,1,&cb);x.context->PSSetConstantBuffers(0,1,&cb);
         MaterialConstants mc{};mc.baseColor[0]=m?m->baseColor.x:1;mc.baseColor[1]=m?m->baseColor.y:1;mc.baseColor[2]=m?m->baseColor.z:1;mc.baseColor[3]=m?m->baseColor.w:1;mc.surface[0]=m?m->metallic:0;mc.surface[1]=m?m->roughness:.7f;mc.surface[2]=m?m->alphaCutoff:.5f;mc.surface[3]=m?(m->alphaMode==QStringLiteral("MASK")?1.f:m->alphaMode==QStringLiteral("BLEND")?2.f:0.f):0.f;mc.emissive[0]=m?m->emissive.x:0;mc.emissive[1]=m?m->emissive.y:0;mc.emissive[2]=m?m->emissive.z:0;mc.details[0]=m?m->normalScale:1.f;mc.details[1]=m?m->occlusionStrength:1.f;mc.triangleBase=d.triangleBase;updateBuffer(x.context.Get(),x.materialCb.Get(),mc);cb=x.materialCb.Get();x.context->PSSetConstantBuffers(1,1,&cb);
         ID3D11ShaderResourceView* maps[5];for(int slot=0;slot<5;++slot)maps[slot]=m&&mi<int(x.materialTextures.size())?x.materialTextures[size_t(mi)][size_t(slot)].Get():x.fallbackTextures[size_t(slot)].Get();x.context->PSSetShaderResources(0,5,maps);

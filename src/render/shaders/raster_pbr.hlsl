@@ -35,6 +35,14 @@ Texture2D<float4> EmissiveMap : register(t4);
 StructuredBuffer<float4> TriangleLighting : register(t5);
 SamplerState MaterialSampler : register(s0);
 
+cbuffer FocusedSpotConstants : register(b2)
+{
+    float3 SpotPosition; float SpotIntensity;
+    float3 SpotDirection; float SpotRange;
+    float3 SpotColor; float SpotInnerCos;
+    float SpotOuterCos; float3 SpotPadding;
+};
+
 VSOutput VSMain(VSInput input)
 {
     VSOutput output;
@@ -82,6 +90,16 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     uint triangleId = TriangleBase + primitiveId;
     float4 triLight = TriangleLighting[triangleId];
     float3 viewDirection = normalize(CameraPosition.xyz - input.worldPosition);
+    float3 fromSpot = input.worldPosition - SpotPosition;
+    float spotDistance = length(fromSpot);
+    float3 spotRay = spotDistance > 1.e-5 ? fromSpot / spotDistance : normalize(SpotDirection);
+    float coneCos = dot(spotRay, normalize(SpotDirection));
+    float cone = smoothstep(SpotOuterCos, SpotInnerCos, coneCos);
+    float rangeFade = saturate(1.0 - spotDistance / max(SpotRange, 1.e-4));
+    float spotEnergy = SpotIntensity * cone * rangeFade * rangeFade;
+    float3 spotToSurface = -spotRay;
+    float spotNdotL = saturate(dot(n, spotToSurface));
+    float3 spotHalfVector = normalize(spotToSurface + viewDirection);
     float3 keyDirection = normalize(float3(-0.55, 0.74, 0.38));
     float3 fillDirection = normalize(float3(0.65, 0.35, -0.67));
     float ndotl = saturate(dot(n, keyDirection));
@@ -95,7 +113,13 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     float3 specular = lerp(float3(0.04, 0.04, 0.04), base.rgb, metallic)
                     * pow(saturate(dot(n, halfVector)), specularPower)
                     * lerp(1.0, 0.18, roughness);
-    float3 color = diffuse + specular + emissive + triLight.a * metallic * base.rgb * (1.0 - roughness) * 0.25;
+    float3 focusedDiffuse = base.rgb * SpotColor * spotEnergy * spotNdotL * (1.0 - metallic) * ao;
+    float3 focusedSpecular = lerp(float3(0.04, 0.04, 0.04), base.rgb, metallic)
+                           * SpotColor * spotEnergy
+                           * pow(saturate(dot(n, spotHalfVector)), specularPower)
+                           * lerp(1.0, 0.18, roughness);
+    float3 color = diffuse + specular + focusedDiffuse + focusedSpecular + emissive
+                 + triLight.a * metallic * base.rgb * (1.0 - roughness) * 0.25;
     color = pow(saturate(color / (1.0 + color)), 1.0 / 2.2);
     return float4(color, alphaMode == 2 ? base.a : 1.0);
 }
