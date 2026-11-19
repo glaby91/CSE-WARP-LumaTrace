@@ -11,4 +11,4 @@ The Direct3D 11 compute pass now samples a hit material's base-colour map for re
 
 The renderer binds the same base-colour SRVs used by raster shading. It supports up to 64 materials in this compute path. Shadow rays remain geometric visibility tests; their occlusion does not depend on surface colour. Alpha-mask transparency during ray hits remains outside this change.
 
-The Porsche ruby/turquoise/orange texture remains a standalone design asset. When it is later assigned to material `paint`, keep the original UV set `TEXCOORD_0` and set `baseColorFactor` to white so the texture colours are preserved.
+The Porsche scene manifest assigns `textures/porsche_930_ruby_turquoise_orange.png` to the material named `paint` through `materialOverrides`. The loader appends the sidecar image to the scene texture list, preserves the GLB's metallic, roughness, and extension values, and sets `baseColorFactor` to white. This override uses the model's original `TEXCOORD_0` and leaves the GLB unchanged.

@@ -1,6 +1,6 @@
 # Porsche 930 — Ruby / Turquoise / Orange
 
-Texture de carrosserie autonome pour le modèle Porsche 930 livré avec LumaTrace. Elle n'est pas encore reliée au GLB ni activée dans l'application.
+Texture de carrosserie du modèle Porsche 930 livré avec LumaTrace. Elle est activée sur le matériau `paint` par le manifeste de scène, sans modifier le GLB source.
 
 ## Cible et format
 
@@ -9,11 +9,11 @@ Texture de carrosserie autonome pour le modèle Porsche 930 livré avec LumaTrac
 - PNG RGB 8 bits, 2048 × 2048, couleurs sRGB.
 - Couleur principale rouge rubis `#9E001E`, rubans turquoise `#00B7C5`, orange `#FF8A24`, filet or `#F7C253`.
 
-## Application ultérieure
+## Affectation au matériau
 
-Ajouter cette image comme `pbrMetallicRoughness.baseColorTexture` du matériau `paint`, avec `texCoord: 0`. Mettre alors `baseColorFactor` à `[1, 1, 1, 1]` afin que le facteur gris foncé d'origine ne ternisse pas les couleurs. Conserver ses facteurs métalliques, de rugosité et extensions.
+Le manifeste utilise une entrée `materialOverrides` qui nomme le matériau `paint`, charge `textures/porsche_930_ruby_turquoise_orange.png` et met `baseColorFactor` à `[1, 1, 1, 1]`. Les facteurs métalliques, la rugosité et les extensions du matériau GLB restent inchangés. L'override conserve les UV0 de la carrosserie.
 
-Le rendu raster et le calcul des reflets par rayons lisent maintenant la texture de couleur de base lorsqu'elle est assignée. Le calcul des rayons utilise les UV interpolées au point d'impact et accepte jusqu'à 64 matériaux. Le traitement de l'alpha des surfaces touchées par les rayons reste à étudier.
+Le rendu raster et le calcul des reflets par rayons lisent maintenant cette texture. Le calcul des rayons utilise les UV interpolées au point d'impact et accepte jusqu'à 64 matériaux. Le traitement de l'alpha des surfaces touchées par les rayons reste à étudier.
 
 ## Régénération
 

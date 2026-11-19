@@ -663,6 +663,54 @@ LoadResult loadScene(const QString& manifestPath, diagnostics::RunLogger* logger
             return result;
         }
     }
+    const auto materialOverrides = manifest.value(QStringLiteral("materialOverrides")).toArray();
+    for (int overrideIndex = 0; overrideIndex < materialOverrides.size(); ++overrideIndex) {
+        const auto overrideDoc = materialOverrides[overrideIndex].toObject();
+        const QString materialName = overrideDoc.value(QStringLiteral("material")).toString();
+        const QString textureRelativePath = overrideDoc.value(QStringLiteral("baseColorTexture")).toString();
+        if (materialName.isEmpty() || textureRelativePath.isEmpty()) {
+            result.error = QStringLiteral("Material override %1 requires material and baseColorTexture.").arg(overrideIndex);
+            return result;
+        }
+        if (overrideDoc.value(QStringLiteral("texCoord")).toInt(0) != 0) {
+            result.error = QStringLiteral("Material override %1 uses unsupported texCoord; LumaTrace currently reads TEXCOORD_0.").arg(overrideIndex);
+            return result;
+        }
+        int materialIndex = -1;
+        for (int i = 0; i < result.scene.materials.size(); ++i) {
+            if (result.scene.materials[i].name == materialName) { materialIndex = i; break; }
+        }
+        if (materialIndex < 0) {
+            result.error = QStringLiteral("Material override target not found: %1.").arg(materialName);
+            return result;
+        }
+        QString texturePath;
+        if (!safeFile(root, textureRelativePath, texturePath, result.error)) return result;
+        QImage image(texturePath);
+        if (image.isNull()) {
+            result.error = QStringLiteral("Cannot decode material override texture: %1.").arg(textureRelativePath);
+            return result;
+        }
+        Texture texture;
+        texture.name = QStringLiteral("%1_baseColor_override").arg(materialName);
+        texture.sourcePath = texturePath;
+        texture.image = std::move(image);
+        const int textureIndex = result.scene.textures.size();
+        result.scene.textures.push_back(std::move(texture));
+        auto& material = result.scene.materials[materialIndex];
+        material.baseColorTexture.texture = textureIndex;
+        material.baseColorTexture.texCoord = 0;
+        float factor[4]{1.f, 1.f, 1.f, 1.f};
+        if (overrideDoc.contains(QStringLiteral("baseColorFactor")) &&
+            !jsonVec(overrideDoc.value(QStringLiteral("baseColorFactor")), 4, factor, result.error,
+                     QStringLiteral("materialOverrides[%1].baseColorFactor").arg(overrideIndex))) return result;
+        for (float component : factor) if (component < 0.f || component > 1.f) {
+            result.error = QStringLiteral("Material override %1 baseColorFactor components must be in [0, 1].").arg(overrideIndex);
+            return result;
+        }
+        material.baseColor = {factor[0], factor[1], factor[2], factor[3]};
+        if (logger) logger->note(QStringLiteral("Override texture · matériau %1 → %2").arg(materialName, textureRelativePath));
+    }
     return result;
 }
 
