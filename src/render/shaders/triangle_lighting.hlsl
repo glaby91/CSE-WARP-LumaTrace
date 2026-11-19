@@ -1,3 +1,5 @@
+#define BVH4_STACK_CAPACITY 64
+
 struct Triangle
 {
     float3 p0; uint material;
@@ -9,18 +11,23 @@ struct Triangle
     float2 uv0; float2 uv1;
     float2 uv2; float2 pad4;
 };
-struct BvhNode
+struct Bvh4Child
 {
-    float3 minimum; uint leftChild;
-    float3 maximum; uint rightChild;
-    uint firstTriangle; uint triangleCount; uint pad0; uint pad1;
+    float3 minimum; uint reference;
+    float3 maximum; uint triangleCount;
+};
+struct Bvh4Node
+{
+    Bvh4Child children[4];
+    uint childCount;
+    uint3 padding;
 };
 struct MaterialData { float4 baseColor; float metallic; float roughness; float2 pad; };
 
 Texture2D<uint> VisibleTriangleIds : register(t0);
 StructuredBuffer<Triangle> Triangles : register(t1);
 StructuredBuffer<uint> TriangleOrder : register(t2);
-StructuredBuffer<BvhNode> Bvh : register(t3);
+StructuredBuffer<Bvh4Node> Bvh : register(t3);
 StructuredBuffer<MaterialData> Materials : register(t4);
 StructuredBuffer<uint> VisibleFlags : register(t5);
 Texture2DArray<float4> BaseColorMaps : register(t6);
@@ -51,14 +58,15 @@ void CSCollectVisible(uint3 dispatchId : SV_DispatchThreadID)
     InterlockedOr(OutVisibleFlags[id], 1);
 }
 
-bool HitBounds(BvhNode node, float3 origin, float3 inverseDirection, float maxDistance)
+bool HitBounds(float3 minimum, float3 maximum, float3 origin, float3 inverseDirection,
+               float maxDistance, out float nearDistance)
 {
-    float3 a = (node.minimum - origin) * inverseDirection;
-    float3 b = (node.maximum - origin) * inverseDirection;
+    float3 a = (minimum - origin) * inverseDirection;
+    float3 b = (maximum - origin) * inverseDirection;
     float3 lo = min(a, b), hi = max(a, b);
-    float nearT = max(max(lo.x, lo.y), max(lo.z, 0.0));
+    nearDistance = max(max(lo.x, lo.y), max(lo.z, 0.0));
     float farT = min(min(hi.x, hi.y), min(hi.z, maxDistance));
-    return farT >= nearT;
+    return farT >= nearDistance;
 }
 
 bool HitTriangle(Triangle tri, float3 origin, float3 direction, float maxDistance,
@@ -82,10 +90,15 @@ bool HitTriangle(Triangle tri, float3 origin, float3 direction, float maxDistanc
     return true;
 }
 
-bool TraceScene(float3 origin, float3 direction, float maxDistance, uint sourceTriangle,
-                out uint hitTriangle, out float hitDistance, out float3 hitBarycentrics)
+bool TraceSceneInternal(float3 origin, float3 direction, float maxDistance, uint sourceTriangle,
+                        bool anyHit, out uint hitTriangle, out float hitDistance,
+                        out float3 hitBarycentrics)
 {
-    uint stack[64]; uint top = 0; stack[top++] = 0;
+    uint stackRef[BVH4_STACK_CAPACITY];
+    uint stackMeta[BVH4_STACK_CAPACITY];
+    float stackNear[BVH4_STACK_CAPACITY];
+    uint top = 1; stackRef[0] = 0; stackMeta[0] = 0; stackNear[0] = 0.0;
+    bool stackOverflow = false;
     float3 safeDirection = float3(
         abs(direction.x) < 1.e-8 ? (direction.x < 0.0 ? -1.e-8 : 1.e-8) : direction.x,
         abs(direction.y) < 1.e-8 ? (direction.y < 0.0 ? -1.e-8 : 1.e-8) : direction.y,
@@ -94,27 +107,98 @@ bool TraceScene(float3 origin, float3 direction, float maxDistance, uint sourceT
     hitTriangle = 0xffffffff; hitDistance = maxDistance; hitBarycentrics = 0.0;
     [loop] while (top > 0)
     {
-        uint nodeIndex = stack[--top];
-        BvhNode node = Bvh[nodeIndex];
-        if (!HitBounds(node, origin, invDir, hitDistance)) continue;
-        if (node.triangleCount > 0)
+        --top;
+        uint reference = stackRef[top];
+        uint leafCount = stackMeta[top];
+        if (stackNear[top] >= hitDistance) continue;
+        if (leafCount > 0)
         {
-            [loop] for (uint j = 0; j < node.triangleCount; ++j)
+            [loop] for (uint j = 0; j < leafCount; ++j)
             {
-                uint id = TriangleOrder[node.firstTriangle + j];
+                uint id = TriangleOrder[reference + j];
                 if (id == sourceTriangle) continue;
                 float t; float3 barycentrics;
                 if (HitTriangle(Triangles[id], origin, direction, hitDistance, t, barycentrics))
-                { hitDistance = t; hitTriangle = id; hitBarycentrics = barycentrics; }
+                {
+                    hitDistance = t; hitTriangle = id; hitBarycentrics = barycentrics;
+                    if (anyHit) return true;
+                }
+            }
+            continue;
+        }
+
+        Bvh4Node node = Bvh[reference];
+        float childNear[4]; uint childRef[4]; uint childMeta[4];
+        uint hitChildren = 0;
+        [loop] for (uint childIndex = 0; childIndex < 4; ++childIndex)
+        {
+            if (childIndex >= node.childCount) break;
+            Bvh4Child child = node.children[childIndex];
+            float nearDistance;
+            if (!HitBounds(child.minimum, child.maximum, origin, invDir,
+                           hitDistance, nearDistance)) continue;
+            childNear[hitChildren] = nearDistance;
+            childRef[hitChildren] = child.reference;
+            childMeta[hitChildren] = child.triangleCount;
+            ++hitChildren;
+        }
+
+        // Sort far-to-near; the stack then visits the nearest child first.
+        [loop] for (uint i = 1; i < hitChildren; ++i)
+        {
+            uint j = i;
+            [loop] while (j > 0 && childNear[j-1] < childNear[j])
+            {
+                float swapNear = childNear[j-1]; childNear[j-1] = childNear[j]; childNear[j] = swapNear;
+                uint swapRef = childRef[j-1]; childRef[j-1] = childRef[j]; childRef[j] = swapRef;
+                uint swapMeta = childMeta[j-1]; childMeta[j-1] = childMeta[j]; childMeta[j] = swapMeta;
+                --j;
             }
         }
-        else if (top < 62)
+        [loop] for (uint i = 0; i < hitChildren; ++i)
         {
-            stack[top++] = node.rightChild;
-            stack[top++] = node.leftChild;
+            if (top < BVH4_STACK_CAPACITY)
+            {
+                stackRef[top] = childRef[i];
+                stackMeta[top] = childMeta[i];
+                stackNear[top] = childNear[i];
+                ++top;
+            }
+            else stackOverflow = true;
+        }
+    }
+
+    // Preserve exact results for unusually deep trees rather than dropping
+    // any pending branch if the fixed GPU traversal stack fills.
+    if (stackOverflow)
+    {
+        hitTriangle = 0xffffffff; hitDistance = maxDistance; hitBarycentrics = 0.0;
+        [loop] for (uint id = 0; id < TriangleCount; ++id)
+        {
+            if (id == sourceTriangle) continue;
+            float t; float3 barycentrics;
+            if (HitTriangle(Triangles[id], origin, direction, hitDistance, t, barycentrics))
+            {
+                hitDistance = t; hitTriangle = id; hitBarycentrics = barycentrics;
+                if (anyHit) return true;
+            }
         }
     }
     return hitTriangle != 0xffffffff;
+}
+
+bool TraceScene(float3 origin, float3 direction, float maxDistance, uint sourceTriangle,
+                out uint hitTriangle, out float hitDistance, out float3 hitBarycentrics)
+{
+    return TraceSceneInternal(origin, direction, maxDistance, sourceTriangle, false,
+                              hitTriangle, hitDistance, hitBarycentrics);
+}
+
+bool TraceSceneAny(float3 origin, float3 direction, float maxDistance, uint sourceTriangle)
+{
+    uint hitTriangle; float hitDistance; float3 hitBarycentrics;
+    return TraceSceneInternal(origin, direction, maxDistance, sourceTriangle, true,
+                              hitTriangle, hitDistance, hitBarycentrics);
 }
 
 float Hash1(uint v)
@@ -161,9 +245,7 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
         float2 lightSample = SampleAreaLight(sampleIndex, samples);
         float3 toLight = normalize(KeyLightDirection + LightAngularRadius *
             (lightRight * lightSample.x + lightUp * lightSample.y));
-        uint shadowHit; float shadowT; float3 shadowBarycentrics;
-        bool occluded = TraceScene(p + n*RayEpsilon, toLight, 10000.0, triangleId,
-                                   shadowHit, shadowT, shadowBarycentrics);
+        bool occluded = TraceSceneAny(p + n*RayEpsilon, toLight, 10000.0, triangleId);
         float visible = occluded ? 0.0 : 1.0;
         // Store ray visibility/intensity only; raster applies its per-pixel
         // (normal-map-aware) Lambert term to avoid multiplying N.L twice.
@@ -194,3 +276,4 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
     TriangleRadiance[triangleId] = float4(accumulatedDiffuse*invSamples,
                                           dot(accumulatedReflection,float3(0.2126,0.7152,0.0722))*invSamples);
 }
+

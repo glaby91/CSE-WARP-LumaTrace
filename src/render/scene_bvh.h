@@ -8,16 +8,22 @@
 
 namespace lumatrace::render {
 
-// 48-byte layout shared verbatim with triangle_lighting.hlsl.
-struct GpuBvhNode {
+// 32-byte child descriptor shared verbatim with triangle_lighting.hlsl.
+// triangleCount == 0 means reference points to another BVH4 node; otherwise
+// reference is the first triangle in the leaf range.
+struct GpuBvh4Child {
     float minX, minY, minZ;
-    std::uint32_t leftChild;
+    std::uint32_t reference;
     float maxX, maxY, maxZ;
-    std::uint32_t rightChild;
-    std::uint32_t firstTriangle;
     std::uint32_t triangleCount;
-    std::uint32_t padding0 = 0;
-    std::uint32_t padding1 = 0;
+};
+
+// Four child descriptors are stored together so the compute shader can test
+// their bounds from one structured-buffer node load.
+struct GpuBvh4Node {
+    GpuBvh4Child children[4]{};
+    std::uint32_t childCount = 0;
+    std::uint32_t padding[3]{};
 };
 
 struct GpuTriangle {
@@ -34,15 +40,16 @@ struct GpuTriangle {
 struct SceneBvh {
     std::vector<GpuTriangle> triangles; // stable global triangle IDs
     std::vector<std::uint32_t> triangleOrder; // leaf ranges into triangles
-    std::vector<GpuBvhNode> nodes;
+    std::vector<GpuBvh4Node> nodes;
     scene::Bounds bounds;
 };
 
-static_assert(sizeof(GpuBvhNode) == 48, "Keep the HLSL BVH node packing in sync");
+static_assert(sizeof(GpuBvh4Child) == 32, "Keep the HLSL BVH4 child packing in sync");
+static_assert(sizeof(GpuBvh4Node) == 144, "Keep the HLSL BVH4 node packing in sync");
 static_assert(sizeof(GpuTriangle) == 128, "Keep the HLSL triangle packing in sync");
 
-// Builds the reusable CPU acceleration structure once after scene loading.
-// The same packed nodes/triangles are uploaded to the D3D11 compute shader.
+// Builds a binned-SAH binary hierarchy, then collapses it to four-way nodes.
+// The packed triangles and BVH are uploaded once after scene loading.
 SceneBvh buildSceneBvh(const scene::Scene& scene, std::uint32_t leafSize = 6);
 
 } // namespace lumatrace::render

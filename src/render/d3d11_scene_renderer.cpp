@@ -205,7 +205,7 @@ struct D3D11SceneRenderer::Impl {
         std::optional<diagnostics::RunLogger::Scope> uploadTiming;
         if(logger)uploadTiming.emplace(logger->scope(QStringLiteral("GPU upload · triangles et BVH")));
         if(!makeBuffer(device.Get(),D3D11_BIND_SHADER_RESOURCE,D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,sizeof(GpuTriangle),bvh.triangles.data(),bvh.triangles.size(),triangleBuffer)
-        || !makeBuffer(device.Get(),D3D11_BIND_SHADER_RESOURCE,D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,sizeof(GpuBvhNode),bvh.nodes.data(),bvh.nodes.size(),bvhBuffer)
+        || !makeBuffer(device.Get(),D3D11_BIND_SHADER_RESOURCE,D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,sizeof(GpuBvh4Node),bvh.nodes.data(),bvh.nodes.size(),bvhBuffer)
         || !makeBuffer(device.Get(),D3D11_BIND_SHADER_RESOURCE,D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,sizeof(std::uint32_t),bvh.triangleOrder.data(),bvh.triangleOrder.size(),orderBuffer)) {
             error=QStringLiteral("D3D11 : upload des triangles/BVH impossible."); return false;
         }
@@ -394,3 +394,4 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
 }
 } // namespace lumatrace::render
 #endif
+

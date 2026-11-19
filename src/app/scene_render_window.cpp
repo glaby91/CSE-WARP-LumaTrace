@@ -63,8 +63,8 @@ private:
 
 SceneRenderWindow::SceneRenderWindow(scene::Scene loadedScene,diagnostics::RunLogger& logger,QString imageOutputPath,QWidget* parent)
     :QMainWindow(parent),scene_(std::move(loadedScene)) {
-    {auto timing=logger.scope(QStringLiteral("buildSceneBvh · construction CPU médiane"));bvh_=render::buildSceneBvh(scene_);}
-    logger.note(QStringLiteral("BVH CPU prêt · %1 triangles · %2 nœuds.").arg(bvh_.triangles.size()).arg(bvh_.nodes.size()));
+    {auto timing=logger.scope(QStringLiteral("buildSceneBvh · construction CPU SAH + assemblage BVH4"));bvh_=render::buildSceneBvh(scene_);}
+    logger.note(QStringLiteral("BVH4 CPU prêt · %1 triangles · %2 nœuds larges.").arg(bvh_.triangles.size()).arg(bvh_.nodes.size()));
     setWindowTitle(QStringLiteral("LumaTrace — %1").arg(scene_.name));
     viewport_=new Viewport(scene_,bvh_,logger,std::move(imageOutputPath),viewportStatus_,[this](const QString& text){statusBar()->showMessage(text);},this);
     auto* controls=addToolBar(QStringLiteral("Rendu"));controls->setMovable(false);
@@ -72,7 +72,7 @@ SceneRenderWindow::SceneRenderWindow(scene::Scene loadedScene,diagnostics::RunLo
     auto* samples=new QComboBox(controls);samples->addItem(QStringLiteral("1 — HD 620"),1);samples->addItem(QStringLiteral("2"),2);samples->addItem(QStringLiteral("4 — qualité"),4);controls->addWidget(samples);
     connect(samples,qOverload<int>(&QComboBox::currentIndexChanged),this,[this,samples](int){viewport_->setLightSamples(samples->currentData().toUInt());});
     setCentralWidget(viewport_);setFixedSize(kViewWidth,kViewHeight+controls->sizeHint().height()+statusBar()->sizeHint().height());
-    statusBar()->showMessage(QStringLiteral("Scène chargée · %1 triangles · BVH CPU : %2 nœuds · profil 960×540")
+    statusBar()->showMessage(QStringLiteral("Scène chargée · %1 triangles · BVH4 CPU : %2 nœuds · profil 960×540")
         .arg(qulonglong(scene_.triangleCount)).arg(qulonglong(bvh_.nodes.size())));
 }
 

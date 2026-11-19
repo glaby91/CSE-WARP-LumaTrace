@@ -1,6 +1,6 @@
 # LumaTrace — note de conception
 
-**Statut :** spécification de prototype ; aucune intégration au moteur CSE WARP n'est réalisée.
+**Statut :** prototype intégré à `CSE-WARP-LumaTrace` ; le parcours BVH4 est implémenté en HLSL compute et doit être mesuré sur matériel Windows réel.
 
 **Socle retenu :** Qt 6 pour l'application et le chargement/contrôle de scène ; Direct3D 11 pour le Z-prepass, les buffers et les compute shaders HLSL (`cs_5_0`). La compilation et les vérifications de conformité se feront dans GitHub Actions sous Windows, comme pour le moteur d'origine. Les tests WARP valident la compilation et le comportement reproductible, mais ne prédisent pas les performances d'une carte graphique réelle.
 
@@ -83,6 +83,10 @@ Construire l'adjacence triangle-triangle à la création du BVH/scène. Le poids
 
 ## HLSL, DirectX 11 et CPU
 
+- Le constructeur CPU produit d'abord un BVH binaire par SAH à 16 groupes, avec des feuilles de 6 triangles, puis aplatit les branches en nœuds BVH4. La construction reste une opération de chargement de scène.
+- Chaque nœud BVH4 regroupe jusqu'à quatre boîtes enfant dans un seul buffer structuré. Le shader teste les enfants, visite les plus proches d'abord, et conserve la recherche de l'intersection la plus proche pour les réflexions.
+- Les rayons d'ombre utilisent une recherche au premier obstacle. Si la pile GPU fixe est pleine, le shader bascule sur un parcours exact de secours de tous les triangles afin de ne perdre aucune branche.
+- Le BVH4 reste un parcours logiciel sur compute shader Direct3D 11 ; il n'utilise pas les unités matérielles DXR. La simulation CPU de la Porsche a réduit le nombre de lectures de nœuds d'environ 55 % face au BVH binaire SAH testé, avec davantage de tests de boîtes ; cette mesure n'est pas un gain de temps GPU.
 - Utiliser des passes raster HLSL pour la pré-passe Z et la composition.
 - Prototyper le calcul par triangle avec un compute shader HLSL et des buffers structurés pour les triangles visibles, les matériaux et les résultats lumineux.
 - Construire d'abord le BVH côté CPU pour valider les données et disposer d'une référence. Un parcours CPU complet peut servir de mode de comparaison ou de secours, mais ses performances doivent être mesurées séparément.
@@ -126,3 +130,4 @@ La tessellation ne crée pas à elle seule de détail géométrique pertinent : 
 Deux GLB du même véhicule sont fournis dans cette session pour isoler l'effet de la résolution des textures. Leur géométrie est identique : **241 260 triangles chacun**. La variante nommée `textures_1k` fait environ 22 MB avec des textures majoritairement 1024 px ; `textures_2k_4k` fait environ 74 MB et comprend des textures jusqu'à 4096 px. Ce ne sont donc pas deux niveaux de détail géométrique.
 
 Voir [la fiche et l'attribution de la Porsche 930](../assets/vehicles/porsche_930/README.md).
+
