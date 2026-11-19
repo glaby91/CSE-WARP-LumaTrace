@@ -43,6 +43,19 @@ jobs:
         run: cmake -S . -B build -A x64 -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
       - name: Build full LumaTrace application
         run: cmake --build build --config Release --target CSE_WARP_LumaTrace --parallel 2
+      - name: Compile D3D11 compute shaders
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem "$env:ProgramFiles(x86)\Windows Kits\10\bin" -Filter fxc.exe -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\fxc\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $fxc) { throw 'fxc.exe was not found in the Windows SDK on this runner.' }
+          $shader = 'src/render/shaders/triangle_lighting.hlsl'
+          & $fxc.FullName /nologo /T cs_5_0 /E CSCollectVisible /Fo "$env:RUNNER_TEMP\CSCollectVisible.cso" $shader
+          if ($LASTEXITCODE -ne 0) { throw "CSCollectVisible HLSL compilation failed: $LASTEXITCODE" }
+          & $fxc.FullName /nologo /T cs_5_0 /E CSShadeVisibleTriangles /Fo "$env:RUNNER_TEMP\CSShadeVisibleTriangles.cso" $shader
+          if ($LASTEXITCODE -ne 0) { throw "CSShadeVisibleTriangles HLSL compilation failed: $LASTEXITCODE" }
       - name: Deploy Qt runtime beside the executable
         run: windeployqt --release --no-translations build/Release/CSE_WARP_LumaTrace.exe
       - name: Upload Windows compile artifact
