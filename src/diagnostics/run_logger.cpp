@@ -42,8 +42,8 @@ void RunLogger::writeLine(int depth,const QString& message){
     if(sink_)sink_(line);
 }
 
-RunPaths makeRunPaths(){
-    QString root=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+RunPaths makeRunPaths(const QString& outputRoot){
+    QString root=outputRoot.isEmpty()?QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation):outputRoot;
     if(root.isEmpty())root=QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("LumaTraceData"));
     const QString stamp=QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
     const QString logs=QDir(root).filePath(QStringLiteral("logs"));

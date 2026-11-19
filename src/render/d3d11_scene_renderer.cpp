@@ -249,8 +249,8 @@ bool D3D11SceneRenderer::initialize(HWND hwnd,const scene::Scene& scene,const Sc
     auto initialization=logger.scope(QStringLiteral("D3D11SceneRenderer::initialize"));
     auto& x=*impl_; const D3D_FEATURE_LEVEL levels[]={D3D_FEATURE_LEVEL_11_0};D3D_FEATURE_LEVEL got{};
     x.logger=&logger;x.imageOutputPath=std::move(imageOutputPath);
-    HRESULT hr=S_OK;bool warp=false;
-    {auto phase=logger.scope(QStringLiteral("D3D11CreateDevice · matériel puis WARP"));hr=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,levels,UINT(std::size(levels)),D3D11_SDK_VERSION,&x.device,&got,&x.context);if(FAILED(hr)){warp=true;hr=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,levels,UINT(std::size(levels)),D3D11_SDK_VERSION,&x.device,&got,&x.context);}}
+    HRESULT hr=S_OK;bool warp=qEnvironmentVariableIsSet("LUMATRACE_FORCE_WARP");
+    {auto phase=logger.scope(warp?QStringLiteral("D3D11CreateDevice · WARP forcé"):QStringLiteral("D3D11CreateDevice · matériel puis WARP"));if(warp)hr=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,levels,UINT(std::size(levels)),D3D11_SDK_VERSION,&x.device,&got,&x.context);else{hr=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,levels,UINT(std::size(levels)),D3D11_SDK_VERSION,&x.device,&got,&x.context);if(FAILED(hr)){warp=true;hr=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,levels,UINT(std::size(levels)),D3D11_SDK_VERSION,&x.device,&got,&x.context);}}}
     if(FAILED(hr)){status=QStringLiteral("Aucun périphérique D3D11 matériel ou WARP disponible.");return false;}
     {auto phase=logger.scope(QStringLiteral("swapchain, backbuffer, profondeur, ID triangle et staging PNG"));if(!x.createTargets(hwnd,status))return false;}
     {auto phase=logger.scope(QStringLiteral("HLSL · compilation des vertex/pixel/compute shaders et états D3D"));if(!x.createPipeline(status))return false;}

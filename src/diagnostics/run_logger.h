@@ -45,6 +45,6 @@ private:
 };
 
 struct RunPaths { QString logFile; QString imageFile; };
-RunPaths makeRunPaths();
+RunPaths makeRunPaths(const QString& outputRoot = {});
 
 } // namespace lumatrace::diagnostics

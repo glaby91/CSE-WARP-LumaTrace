@@ -9,6 +9,7 @@
 #endif
 
 #include <QString>
+#include <cstdint>
 
 #include <memory>
 
@@ -17,7 +18,8 @@ namespace lumatrace::app {
 class SceneRenderWindow final : public QMainWindow {
 public:
     explicit SceneRenderWindow(scene::Scene loadedScene, diagnostics::RunLogger& logger,
-                               QString imageOutputPath, QWidget* parent = nullptr);
+                               QString imageOutputPath, std::uint32_t samplesPerTriangle = 1,
+                               bool exitAfterRender = false, QWidget* parent = nullptr);
     ~SceneRenderWindow() override;
 
 private:

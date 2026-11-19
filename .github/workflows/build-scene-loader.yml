@@ -22,6 +22,8 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - name: Report scene asset hydration
         shell: pwsh
         run: |
@@ -58,9 +60,60 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "CSShadeVisibleTriangles HLSL compilation failed: $LASTEXITCODE" }
       - name: Deploy Qt runtime beside the executable
         run: windeployqt --release --no-translations build/Release/CSE_WARP_LumaTrace.exe
+      - name: Capture WARP renders for 1, 2 and 4 samples
+        shell: pwsh
+        run: |
+          $env:LUMATRACE_FORCE_WARP = '1'
+          $exe = (Resolve-Path 'build/Release/CSE_WARP_LumaTrace.exe').Path
+          $root = Join-Path $env:RUNNER_TEMP 'LumaTrace-benchmark'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $metrics = @()
+          $images = @()
+          foreach ($sample in @(1, 2, 4)) {
+            $sampleRoot = Join-Path $root "samples-$sample"
+            $process = Start-Process -FilePath $exe -ArgumentList @("--samples=$sample", "--output-dir=$sampleRoot", '--exit-after-render') -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "LumaTrace WARP capture for $sample sample(s) exited with $($process.ExitCode)." }
+            $image = Get-ChildItem (Join-Path $sampleRoot 'renders') -Filter "*_${sample}_*" | Select-Object -First 1
+            $log = Get-ChildItem (Join-Path $sampleRoot 'logs') -Filter '*.log' | Select-Object -First 1
+            if (-not $image -or -not $log) { throw "Missing PNG or log for $sample sample(s)." }
+            $logText = Get-Content $log.FullName -Raw
+            if ($logText -match 'ÉCHEC chargement|ERREUR D3D11|ERREUR : lecture staging') { throw "LumaTrace capture log contains an error: $($log.FullName)" }
+            $frameMatch = [regex]::Match($logText, 'frame · rendu complet du profil courant — (\d+) ms')
+            $exportMatch = [regex]::Match($logText, 'export · capture PNG du rendu final — (\d+) ms')
+            $metrics += [pscustomobject]@{ samples = $sample; frame_ms = if ($frameMatch.Success) { [int]$frameMatch.Groups[1].Value } else { $null }; export_ms = if ($exportMatch.Success) { [int]$exportMatch.Groups[1].Value } else { $null }; image = $image.Name }
+            $images += [pscustomobject]@{ samples = $sample; path = $image.FullName }
+          }
+          $metrics | Export-Csv (Join-Path $root 'timings.csv') -NoTypeInformation
+          $metrics | Format-Table | Out-String | Write-Host
+          Add-Type -AssemblyName System.Drawing
+          $reference = [System.Drawing.Bitmap]::new($images[0].path)
+          $drift = @()
+          foreach ($candidate in $images | Select-Object -Skip 1) {
+            $bitmap = [System.Drawing.Bitmap]::new($candidate.path)
+            if ($bitmap.Width -ne $reference.Width -or $bitmap.Height -ne $reference.Height) { throw 'WARP captures have different dimensions.' }
+            [long]$sum = 0;[long]$changed = 0
+            for ($y = 0; $y -lt $reference.Height; $y++) {
+              for ($x = 0; $x -lt $reference.Width; $x++) {
+                $a = $reference.GetPixel($x,$y);$b = $bitmap.GetPixel($x,$y)
+                $difference = [Math]::Abs([int]$a.R-[int]$b.R)+[Math]::Abs([int]$a.G-[int]$b.G)+[Math]::Abs([int]$a.B-[int]$b.B)
+                $sum += $difference;if ($difference -ne 0) { $changed++ }
+              }
+            }
+            $drift += [pscustomobject]@{ reference_samples = 1; samples = $candidate.samples; changed_pixels = $changed; mean_absolute_channel_difference = [Math]::Round($sum / ($reference.Width*$reference.Height*3), 6) }
+            $bitmap.Dispose()
+          }
+          $reference.Dispose()
+          $drift | Export-Csv (Join-Path $root 'image-drift.csv') -NoTypeInformation
+          $drift | Format-Table | Out-String | Write-Host
       - name: Upload Windows compile artifact
         uses: actions/upload-artifact@v4
         with:
           name: CSE-WARP-LumaTrace-windows-x64-compile
           path: build/Release/
+          if-no-files-found: error
+      - name: Upload WARP benchmark images and timings
+        uses: actions/upload-artifact@v4
+        with:
+          name: CSE-WARP-LumaTrace-warp-benchmark
+          path: ${{ runner.temp }}/LumaTrace-benchmark/
           if-no-files-found: error
