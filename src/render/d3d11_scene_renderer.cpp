@@ -18,6 +18,8 @@
 #include <cstring>
 #include <climits>
 #include <iterator>
+#include <chrono>
+#include <thread>
 #include <optional>
 #include <vector>
 
@@ -25,6 +27,7 @@ namespace lumatrace::render {
 namespace {
 using Microsoft::WRL::ComPtr;
 constexpr UINT kWidth = 960, kHeight = 540;
+constexpr size_t kGpuPassCount = 4;
 constexpr float kPi = 3.14159265358979323846f;
 
 struct GpuVertex { float p[3], n[3], uv[2], tangent[4], color[4]; };
@@ -124,7 +127,52 @@ struct D3D11SceneRenderer::Impl {
     std::vector<Draw> draws; std::vector<std::array<ComPtr<ID3D11ShaderResourceView>,5>> materialTextures;
     std::array<ComPtr<ID3D11ShaderResourceView>,5> fallbackTextures;
     std::array<float,16> vp{}; float camera[3]{}; float lightPosition[3]{}, lightRadius=0.f, rayEpsilon=1.e-4f; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
+    std::array<ComPtr<ID3D11Query>,kGpuPassCount> gpuPassStart{},gpuPassEnd{};
+    ComPtr<ID3D11Query> gpuDisjoint; bool gpuTimersReady=false;
     diagnostics::RunLogger* logger=nullptr; QString imageOutputPath;
+
+    bool createGpuTimers() {
+        D3D11_QUERY_DESC timestampDesc{}; timestampDesc.Query=D3D11_QUERY_TIMESTAMP;
+        for(size_t i=0;i<kGpuPassCount;++i){
+            if(FAILED(device->CreateQuery(&timestampDesc,&gpuPassStart[i]))||FAILED(device->CreateQuery(&timestampDesc,&gpuPassEnd[i])))return false;
+        }
+        D3D11_QUERY_DESC disjointDesc{}; disjointDesc.Query=D3D11_QUERY_TIMESTAMP_DISJOINT;
+        if(FAILED(device->CreateQuery(&disjointDesc,&gpuDisjoint)))return false;
+        gpuTimersReady=true;
+        return true;
+    }
+
+    void reportGpuTimings() {
+        if(!gpuTimersReady||!logger)return;
+        context->Flush();
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+        auto readQuery=[&](ID3D11Query* query,void* data,UINT bytes){
+            HRESULT hr=S_FALSE;
+            do{
+                hr=context->GetData(query,data,bytes,D3D11_ASYNC_GETDATA_DONOTFLUSH);
+                if(hr==S_FALSE)std::this_thread::yield();
+            }while(hr==S_FALSE&&std::chrono::steady_clock::now()<deadline);
+            return SUCCEEDED(hr);
+        };
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
+        std::array<UINT64,kGpuPassCount> starts{},ends{};
+        bool ok=readQuery(gpuDisjoint.Get(),&disjoint,sizeof(disjoint));
+        for(size_t i=0;i<kGpuPassCount&&ok;++i)
+            ok=readQuery(gpuPassStart[i].Get(),&starts[i],sizeof(UINT64))&&readQuery(gpuPassEnd[i].Get(),&ends[i],sizeof(UINT64));
+        if(!ok||disjoint.Disjoint||disjoint.Frequency==0){
+            logger->note(QStringLiteral("GPU timestamps indisponibles pour cette image."));
+            gpuTimersReady=false;
+            return;
+        }
+        const std::array<QString,kGpuPassCount> labels={
+            QStringLiteral("Z-prepass"),QStringLiteral("HLSL visibilité"),
+            QStringLiteral("HLSL rayons + BVH"),QStringLiteral("raster Direct3D")
+        };
+        for(size_t i=0;i<kGpuPassCount;++i){
+            const double ms=double(ends[i]-starts[i])*1000.0/double(disjoint.Frequency);
+            logger->note(QStringLiteral("Temps GPU · %1 : %2 ms").arg(labels[i]).arg(ms,0,'f',3));
+        }
+    }
 
     bool makeTexture(const QImage& source, ComPtr<ID3D11ShaderResourceView>& out, bool srgb=false) {
         QImage image=source.convertToFormat(QImage::Format_RGBA8888);
@@ -255,6 +303,7 @@ bool D3D11SceneRenderer::initialize(HWND hwnd,const scene::Scene& scene,const Sc
     {auto phase=logger.scope(QStringLiteral("swapchain, backbuffer, profondeur, ID triangle et staging PNG"));if(!x.createTargets(hwnd,status))return false;}
     {auto phase=logger.scope(QStringLiteral("HLSL · compilation des vertex/pixel/compute shaders et états D3D"));if(!x.createPipeline(status))return false;}
     {auto phase=logger.scope(QStringLiteral("ressources de scène et buffers GPU"));if(!x.createSceneResources(scene,bvh,status))return false;}
+    if(!x.createGpuTimers())logger.note(QStringLiteral("GPU timestamps indisponibles ; les temps GPU par passe ne seront pas journalisés."));
     x.vp=cameraMatrix(scene.bounds,x.camera);
     const scene::Vec3 center=scene.bounds.valid?scene::Vec3{(scene.bounds.minimum.x+scene.bounds.maximum.x)*.5f,(scene.bounds.minimum.y+scene.bounds.maximum.y)*.5f,(scene.bounds.minimum.z+scene.bounds.maximum.z)*.5f}:scene::Vec3{};
     const float dx=scene.bounds.maximum.x-scene.bounds.minimum.x,dy=scene.bounds.maximum.y-scene.bounds.minimum.y,dz=scene.bounds.maximum.z-scene.bounds.minimum.z;
@@ -280,9 +329,12 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
     const bool logFrame=x.timingNextFrame;x.timingNextFrame=false;
     std::optional<diagnostics::RunLogger::Scope> frameTiming;
     if(logFrame&&x.logger)frameTiming.emplace(x.logger->scope(QStringLiteral("frame · rendu complet du profil courant")));
+    const bool captureGpuTiming=logFrame&&x.logger&&x.gpuTimersReady;
+    if(captureGpuTiming)x.context->Begin(x.gpuDisjoint.Get());
     const float clear[4]={.035f,.045f,.06f,1.f};const UINT noId[4]={0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu};const UINT zero[4]={0,0,0,0};
     std::optional<diagnostics::RunLogger::Scope> passTiming;
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("Z-prepass · profondeur et ID triangle visible")));
+    if(captureGpuTiming)x.context->End(x.gpuPassStart[0].Get());
     x.context->ClearUnorderedAccessViewUint(x.idUav.Get(),noId);ID3D11RenderTargetView* idTarget=x.idRtv.Get();x.context->OMSetRenderTargets(1,&idTarget,x.depthDsv.Get());x.context->ClearDepthStencilView(x.depthDsv.Get(),D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL,1.f,0);
     D3D11_VIEWPORT vp{0,0,float(kWidth),float(kHeight),0,1};x.context->RSSetViewports(1,&vp);x.context->RSSetState(x.rasterState.Get());x.context->OMSetDepthStencilState(x.depthWrite.Get(),0);x.context->IASetInputLayout(x.inputLayout.Get());x.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);x.context->VSSetShader(x.preVs.Get(),nullptr,0);x.context->PSSetShader(x.prePs.Get(),nullptr,0);
     for(size_t i=0;i<scene.primitives.size()&&i<x.draws.size();++i){const auto& p=scene.primitives[int(i)];const auto& d=x.draws[i];if(!d.vb||!d.ib)continue;const int mi=d.material;const scene::Material* m=mi>=0?&scene.materials[mi]:nullptr;const UINT am=m?(m->alphaMode==QStringLiteral("MASK")?1u:m->alphaMode==QStringLiteral("BLEND")?2u:0u):0u;x.context->RSSetState(m&&m->doubleSided?x.rasterDoubleSided.Get():x.rasterState.Get());
@@ -291,24 +343,31 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
         UINT stride=sizeof(GpuVertex),offset=0;ID3D11Buffer* vb=d.vb.Get();x.context->IASetVertexBuffers(0,1,&vb,&stride,&offset);x.context->IASetIndexBuffer(d.ib.Get(),DXGI_FORMAT_R32_UINT,0);if(am!=2)x.context->DrawIndexed(d.indexCount,0,0);
     }
     ID3D11RenderTargetView* none=nullptr;x.context->OMSetRenderTargets(0,&none,nullptr);
+    if(captureGpuTiming)x.context->End(x.gpuPassEnd[0].Get());
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · marquage des triangles visibles")));
+    if(captureGpuTiming)x.context->End(x.gpuPassStart[1].Get());
     x.context->ClearUnorderedAccessViewUint(x.visibleUav.Get(),zero);
     LightConstants lc{};lc.width=kWidth;lc.height=kHeight;lc.triangleCount=x.triCount;lc.samples=x.samples;lc.camera[0]=x.camera[0];lc.camera[1]=x.camera[1];lc.camera[2]=x.camera[2];lc.epsilon=x.rayEpsilon;std::copy(std::begin(x.lightPosition),std::end(x.lightPosition),lc.lightPosition);lc.intensity=1.8f;lc.lightColor[0]=1.f;lc.lightColor[1]=.93f;lc.lightColor[2]=.82f;lc.lightRadius=x.lightRadius;updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
     ID3D11ShaderResourceView* ids=x.idSrv.Get();x.context->CSSetShaderResources(0,1,&ids);ID3D11UnorderedAccessView* vis=x.visibleUav.Get();x.context->CSSetUnorderedAccessViews(0,1,&vis,nullptr);x.context->CSSetShader(x.collectCs.Get(),nullptr,0);x.context->Dispatch((kWidth+7)/8,(kHeight+7)/8,1);
+    if(captureGpuTiming)x.context->End(x.gpuPassEnd[1].Get());
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · rayons d'ombre/réflexion et parcours BVH")));
+    if(captureGpuTiming)x.context->End(x.gpuPassStart[2].Get());
     ID3D11ShaderResourceView* nullSrv=nullptr;ID3D11UnorderedAccessView* nullUav=nullptr;x.context->CSSetShaderResources(0,1,&nullSrv);x.context->CSSetUnorderedAccessViews(0,1,&nullUav,nullptr);
     ID3D11ShaderResourceView* computeSrvs[6]={nullptr,x.triangleSrv.Get(),x.orderSrv.Get(),x.bvhSrv.Get(),x.materialSrv.Get(),x.visibleSrv.Get()};x.context->CSSetShaderResources(1,6,computeSrvs);ID3D11UnorderedAccessView* outputs[2]={nullptr,x.radianceUav.Get()};x.context->CSSetUnorderedAccessViews(0,2,outputs,nullptr);x.context->CSSetShader(x.shadeCs.Get(),nullptr,0);x.context->Dispatch((x.triCount+63)/64,1,1);
     x.context->CSSetShader(nullptr,nullptr,0);x.context->CSSetShaderResources(1,6,std::array<ID3D11ShaderResourceView*,6>{}.data());x.context->CSSetUnorderedAccessViews(0,2,std::array<ID3D11UnorderedAccessView*,2>{}.data(),nullptr);
+    if(captureGpuTiming)x.context->End(x.gpuPassEnd[2].Get());
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("raster Direct3D · textures, normales, alpha et affichage")));
+    if(captureGpuTiming)x.context->End(x.gpuPassStart[3].Get());
     ID3D11RenderTargetView* color=x.backRtv.Get();x.context->OMSetRenderTargets(1,&color,x.depthDsv.Get());x.context->ClearRenderTargetView(x.backRtv.Get(),clear);x.context->OMSetDepthStencilState(x.depthRead.Get(),0);x.context->VSSetShader(x.rasterVs.Get(),nullptr,0);x.context->PSSetShader(x.rasterPs.Get(),nullptr,0);ID3D11ShaderResourceView* lightSrv=x.radianceSrv.Get();x.context->PSSetShaderResources(5,1,&lightSrv);ID3D11SamplerState* samp=x.sampler.Get();x.context->PSSetSamplers(0,1,&samp);
     for(size_t i=0;i<scene.primitives.size()&&i<x.draws.size();++i){const auto& p=scene.primitives[int(i)];const auto& d=x.draws[i];if(!d.vb||!d.ib)continue;const int mi=d.material;const scene::Material* m=mi>=0?&scene.materials[mi]:nullptr;x.context->RSSetState(m&&m->doubleSided?x.rasterDoubleSided.Get():x.rasterState.Get());RasterCamera rc{};std::copy(x.vp.begin(),x.vp.end(),rc.vp);std::copy(p.worldTransform.begin(),p.worldTransform.end(),rc.world);const auto nm=normalMatrix(p.worldTransform);std::copy(nm.begin(),nm.end(),rc.normalWorld);rc.camera[0]=x.camera[0];rc.camera[1]=x.camera[1];rc.camera[2]=x.camera[2];rc.camera[3]=1;updateBuffer(x.context.Get(),x.rasterCameraCb.Get(),rc);ID3D11Buffer* cb=x.rasterCameraCb.Get();x.context->VSSetConstantBuffers(0,1,&cb);x.context->PSSetConstantBuffers(0,1,&cb);
         MaterialConstants mc{};mc.baseColor[0]=m?m->baseColor.x:1;mc.baseColor[1]=m?m->baseColor.y:1;mc.baseColor[2]=m?m->baseColor.z:1;mc.baseColor[3]=m?m->baseColor.w:1;mc.surface[0]=m?m->metallic:0;mc.surface[1]=m?m->roughness:.7f;mc.surface[2]=m?m->alphaCutoff:.5f;mc.surface[3]=m?(m->alphaMode==QStringLiteral("MASK")?1.f:m->alphaMode==QStringLiteral("BLEND")?2.f:0.f):0.f;mc.emissive[0]=m?m->emissive.x:0;mc.emissive[1]=m?m->emissive.y:0;mc.emissive[2]=m?m->emissive.z:0;mc.details[0]=m?m->normalScale:1.f;mc.details[1]=m?m->occlusionStrength:1.f;mc.triangleBase=d.triangleBase;updateBuffer(x.context.Get(),x.materialCb.Get(),mc);cb=x.materialCb.Get();x.context->PSSetConstantBuffers(1,1,&cb);
         ID3D11ShaderResourceView* maps[5];for(int slot=0;slot<5;++slot)maps[slot]=m&&mi<int(x.materialTextures.size())?x.materialTextures[size_t(mi)][size_t(slot)].Get():x.fallbackTextures[size_t(slot)].Get();x.context->PSSetShaderResources(0,5,maps);
         UINT stride=sizeof(GpuVertex),offset=0;ID3D11Buffer* vb=d.vb.Get();x.context->IASetVertexBuffers(0,1,&vb,&stride,&offset);x.context->IASetIndexBuffer(d.ib.Get(),DXGI_FORMAT_R32_UINT,0);if(mc.surface[3]==2){const float blend[4]={0,0,0,0};x.context->OMSetBlendState(x.alphaBlend.Get(),blend,0xffffffff);}else x.context->OMSetBlendState(nullptr,nullptr,0xffffffff);x.context->DrawIndexed(d.indexCount,0,0);
     }
+    if(captureGpuTiming)x.context->End(x.gpuPassEnd[3].Get());
     passTiming.reset();
     x.context->OMSetBlendState(nullptr,nullptr,0xffffffff);x.context->OMSetRenderTargets(0,&none,nullptr);x.context->PSSetShaderResources(0,6,std::array<ID3D11ShaderResourceView*,6>{}.data());
     if(x.imageExportPending){
@@ -331,6 +390,11 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
     }
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("Present · VSync")));
     x.swap->Present(1,0);
+    if(captureGpuTiming){
+        x.context->End(x.gpuDisjoint.Get());
+        frameTiming.reset();
+        x.reportGpuTimings();
+    }
 }
 } // namespace lumatrace::render
 #endif
