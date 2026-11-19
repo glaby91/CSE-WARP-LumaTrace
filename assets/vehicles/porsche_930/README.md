@@ -1,28 +1,20 @@
-# Porsche 911 (930) Turbo, 1975 — modèle de test
+# Porsche 911 (930) Turbo, 1975
 
-Deux variantes GLB du même modèle ont été analysées pour tester l'impact des textures. Leurs métadonnées sont consignées ici ; les binaires ne sont pas encore présents dans la branche distante :
+The repository now contains the complete 1K-texture asset used by LumaTrace:
 
-| Fichier | Taille approximative | Géométrie | Textures |
-|---|---:|---:|---|
-| `porsche_930_textures_1k.glb` | 22 MB | 241 260 triangles | 27 images, principalement 1024 × 1024 |
-| `porsche_930_textures_2k_4k.glb` | 74 MB | 241 260 triangles | 27 images, jusqu'à 4096 × 4096 |
+- `scene/porsche_930.glb` — 241,260 triangles, 75 primitives, 14 materials.
+- `scene/textures/image_00.png` through `image_26.png` — all 27 original model textures referenced by the GLB.
+- `scene/import_report.json` — import counts and source glTF extensions.
+- `scene/scene.json` — the LumaTrace scene manifest and the paint-material color override.
 
-Le nombre de triangles est identique ; la différence de qualité provient principalement des textures. Les fichiers binaires sont des pièces jointes de travail de cette session ; seul leur descriptif et leurs métriques ont été publiés dans le dépôt distant pour l'instant.
+The scene manifest keeps the source model intact and applies the custom ruby-red paint texture with turquoise and orange accents to the material named `paint`. That override is stored separately at `scene/textures/porsche_930_ruby_turquoise_orange.png`; it uses the model's UV0 coordinates. No road, ground plane, or other props are included.
 
-## Source et attribution
+## Source and attribution
 
-Karol Miklas / **Lionsharp Studios**, *1975 Porsche 911 (930) Turbo* : [page du modèle](https://www.lionsharpstudios.com/portfolio/1975-porsche-911-930-turbo/) · [fiche Sketchfab](https://sketchfab.com/3d-models/free-1975-porsche-911-930-turbo-8568d9d14a994b9cae59499f0dbed21e).
+Karol Miklas / **Lionsharp Studios**, *1975 Porsche 911 (930) Turbo*: [Lionsharp Studios model page](https://www.lionsharpstudios.com/portfolio/1975-porsche-911-930-turbo/) · [Sketchfab listing](https://sketchfab.com/3d-models/free-1975-porsche-911-930-turbo-8568d9d14a994b9cae59499f0dbed21e).
 
-La fiche du modèle indique une licence **Creative Commons Attribution**. Conserver cette attribution avec le modèle et vérifier la licence sur la fiche source avant toute redistribution ou publication du projet.
+The source listing identifies the model as Creative Commons Attribution. Retain this attribution when redistributing the source model and check the original listing for the applicable license terms.
 
-## Usage prévu
+## Use
 
-Asset de test pour le prototype LumaTrace : import, lecture des matériaux et textures, comparaison des variantes et benchmark. Ce dépôt ne prétend pas être le créateur du modèle.
-
-## Préparation pour une scène LumaTrace
-
-Le paquet [`Porsche_930_LumaTrace_Scene.zip`](Porsche_930_LumaTrace_Scene.zip) contient une scène avec un seul objet voiture. Le GLB de travail est la variante 1K : elle garde les 241 260 triangles, les 14 matériaux et les 27 images du modèle tout en restant plus légère que la variante 4K.
-
-Le préparateur déplace les images embarquées vers `textures/` et réécrit leurs URI dans le GLB. Les accessors, indices, UV, normales, hiérarchie de nœuds, matériaux, modes alpha et extensions glTF restent dans les données du modèle. La scène n'ajoute ni route ni décor.
-
-Le manifeste `scene.json` est le contrat d'import LumaTrace. Le chargeur de ce dépôt reconnaît `gltf2-model`, charge le GLB et ses images externes, et conserve les matériaux PBR et alpha pour le renderer D3D11.
+Open `scene/scene.json` with LumaTrace. The loader reads the GLB, its original external textures, and the manifest's separate paint override. The source GLB preserves its node hierarchy, geometry buffers, normals, UVs, metallic-roughness data, alpha modes, and glTF extensions.
