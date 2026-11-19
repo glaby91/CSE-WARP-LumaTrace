@@ -420,6 +420,7 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh,QI
     }
     passTiming.reset();
     x.context->OMSetBlendState(nullptr,nullptr,0xffffffff);x.context->OMSetRenderTargets(0,&none,nullptr);x.context->PSSetShaderResources(0,6,std::array<ID3D11ShaderResourceView*,6>{}.data());
+    if(x.msaaSamples>1)x.context->ResolveSubresource(x.backBuffer.Get(),0,x.msaaColorTexture.Get(),0,DXGI_FORMAT_B8G8R8A8_UNORM);
     if(x.imageExportPending || capturedFrame){
         std::optional<diagnostics::RunLogger::Scope> imageTiming;
         if(x.logger)imageTiming.emplace(x.logger->scope(QStringLiteral("export · capture PNG du rendu final")));
