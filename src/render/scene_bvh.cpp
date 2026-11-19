@@ -79,7 +79,7 @@ SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
     // partitioning, then collapse its upper levels into four-way GPU nodes.
     struct BinaryNode {
         BuildBounds bounds;
-        std::uint32_t left=0, right=0, first=0, count=0;
+        std::uint32_t left=0, right=0, first=0, count=0, primitiveCount=0;
         bool leaf=false;
     };
     std::vector<BinaryNode> binary;
@@ -99,6 +99,7 @@ SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
         const std::uint32_t at=std::uint32_t(binary.size());
         binary.emplace_back();
         binary[at].bounds=bounds;
+        binary[at].primitiveCount=count;
         if(count<=std::max(1u,leafSize)) {
             binary[at].leaf=true;binary[at].first=first;binary[at].count=count;
             return at;
@@ -173,8 +174,9 @@ SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
     };
     const std::uint32_t binaryRoot=buildBinary(buildBinary,0,std::uint32_t(out.triangles.size()));
 
-    // Greedily expand the largest-area binary interior while there is room,
-    // giving each wide node up to four children and retaining leaf ranges.
+    // Collapse binary nodes only when the split lowers the estimated SAH
+    // primitive cost. This keeps the four-way nodes from introducing
+    // extra overlap merely to fill all four child slots.
     const auto emitWide=[&](auto&& self,std::uint32_t sourceIndex)->std::uint32_t {
         const std::uint32_t at=std::uint32_t(out.nodes.size());
         out.nodes.emplace_back();
@@ -189,12 +191,17 @@ SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
         std::vector<std::uint32_t> children{sourceNode.left,sourceNode.right};
         while(children.size()<4) {
             auto candidate=children.end();
-            float largestArea=-1.f;
+            float bestBenefit=0.f;
             for(auto it=children.begin();it!=children.end();++it) {
                 const auto& child=binary[*it];
-                if(!child.leaf && child.bounds.area()>largestArea) {
-                    largestArea=child.bounds.area();candidate=it;
-                }
+                if(child.leaf) continue;
+                const auto& left=binary[child.left];
+                const auto& right=binary[child.right];
+                const float before=child.bounds.area()*float(child.primitiveCount);
+                const float after=left.bounds.area()*float(left.primitiveCount)
+                                 +right.bounds.area()*float(right.primitiveCount);
+                const float benefit=before-after;
+                if(benefit>bestBenefit) { bestBenefit=benefit;candidate=it; }
             }
             if(candidate==children.end()) break;
             const auto expanded=*candidate;
