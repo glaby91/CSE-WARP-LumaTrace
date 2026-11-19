@@ -81,22 +81,36 @@ jobs:
           }
           $metrics = @()
           $images = @()
+          $repeats = 5
           foreach ($sample in @(1, 2, 4)) {
-            $sampleRoot = Join-Path $root "samples-$sample"
-            $process = Start-Process -FilePath $exe -ArgumentList @("--samples=$sample", "--output-dir=$sampleRoot", '--exit-after-render', $scene) -Wait -PassThru
-            if ($process.ExitCode -ne 0) { throw "LumaTrace WARP capture for $sample sample(s) exited with $($process.ExitCode)." }
-            $image = Get-ChildItem (Join-Path $sampleRoot 'renders') -Filter "*_${sample}_*" | Select-Object -First 1
-            $log = Get-ChildItem (Join-Path $sampleRoot 'logs') -Filter '*.log' | Select-Object -First 1
-            if (-not $image -or -not $log) { throw "Missing PNG or log for $sample sample(s)." }
-            $logText = Get-Content $log.FullName -Raw
-            if ($logText -match 'ÉCHEC chargement|ERREUR D3D11|ERREUR : lecture staging') { throw "LumaTrace capture log contains an error: $($log.FullName)" }
-            $frameMatch = [regex]::Match($logText, 'frame · rendu complet du profil courant — (\d+) ms')
-            $exportMatch = [regex]::Match($logText, 'export · capture PNG du rendu final — (\d+) ms')
-            $metrics += [pscustomobject]@{ samples = $sample; frame_ms = if ($frameMatch.Success) { [int]$frameMatch.Groups[1].Value } else { $null }; export_ms = if ($exportMatch.Success) { [int]$exportMatch.Groups[1].Value } else { $null }; image = $image.Name }
-            $images += [pscustomobject]@{ samples = $sample; path = $image.FullName }
+            for ($repeat = 1; $repeat -le $repeats; $repeat++) {
+              $sampleRoot = Join-Path $root "samples-$sample/repeat-$repeat"
+              $process = Start-Process -FilePath $exe -ArgumentList @("--samples=$sample", "--output-dir=$sampleRoot", '--exit-after-render', $scene) -Wait -PassThru
+              if ($process.ExitCode -ne 0) { throw "LumaTrace WARP capture for $sample sample(s), repeat $repeat exited with $($process.ExitCode)." }
+              $image = Get-ChildItem (Join-Path $sampleRoot 'renders') -Filter "*_${sample}_*" | Select-Object -First 1
+              $log = Get-ChildItem (Join-Path $sampleRoot 'logs') -Filter '*.log' | Select-Object -First 1
+              if (-not $image -or -not $log) { throw "Missing PNG or log for $sample sample(s), repeat $repeat." }
+              $logText = Get-Content $log.FullName -Raw
+              if ($logText -match 'ÉCHEC chargement|ERREUR D3D11|ERREUR : lecture staging') { throw "LumaTrace capture log contains an error: $($log.FullName)" }
+              $frameMatch = [regex]::Match($logText, 'frame · rendu complet du profil courant — (\d+) ms')
+              $exportMatch = [regex]::Match($logText, 'export · capture PNG du rendu final — (\d+) ms')
+              if (-not $frameMatch.Success -or -not $exportMatch.Success) { throw "Missing timing metrics in $($log.FullName)." }
+              $metrics += [pscustomobject]@{ samples = $sample; repeat = $repeat; frame_ms = [int]$frameMatch.Groups[1].Value; export_ms = [int]$exportMatch.Groups[1].Value; image = $image.Name }
+              if ($repeat -eq 1) { $images += [pscustomobject]@{ samples = $sample; path = $image.FullName } }
+            }
           }
           $metrics | Export-Csv (Join-Path $root 'timings.csv') -NoTypeInformation
-          $metrics | Format-Table | Out-String | Write-Host
+          $summary = foreach ($group in ($metrics | Group-Object samples)) {
+            $frames = @($group.Group | ForEach-Object { [double]$_.frame_ms } | Sort-Object)
+            $exports = @($group.Group | ForEach-Object { [double]$_.export_ms } | Sort-Object)
+            $frameMedian = $frames[[int][Math]::Floor($frames.Count / 2)]
+            $exportMedian = $exports[[int][Math]::Floor($exports.Count / 2)]
+            $frameMean = ($frames | Measure-Object -Average).Average
+            $frameVariance = (($frames | ForEach-Object { [Math]::Pow($_ - $frameMean, 2) } | Measure-Object -Sum).Sum / $frames.Count)
+            [pscustomobject]@{ samples = [int]$group.Name; repeats = $frames.Count; frame_median_ms = $frameMedian; frame_min_ms = $frames[0]; frame_max_ms = $frames[-1]; frame_cv_percent = [Math]::Round(([Math]::Sqrt($frameVariance) / $frameMean) * 100, 2); export_median_ms = $exportMedian; export_min_ms = $exports[0]; export_max_ms = $exports[-1] }
+          }
+          $summary | Export-Csv (Join-Path $root 'timings-summary.csv') -NoTypeInformation
+          $summary | Format-Table | Out-String | Write-Host
           Add-Type -AssemblyName System.Drawing
           $reference = [System.Drawing.Bitmap]::new($images[0].path)
           $drift = @()
