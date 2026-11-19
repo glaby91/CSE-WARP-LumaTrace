@@ -60,7 +60,7 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
 {
     float4 base = BaseColorMap.Sample(MaterialSampler, input.uv) * BaseColorFactor * input.color;
     // Direct-lit non-emissive racing red paint override for the Porsche body.
-    if (MaterialPadding.x != 0) base.rgb = float3(0.72, 0.012, 0.028);
+    if (MaterialPadding.x != 0) base.rgb = float3(1.00, 0.008, 0.020);
     const uint alphaMode = (uint)SurfaceFactors.w;
     if (alphaMode == 1 && base.a < SurfaceFactors.z) discard;
 
