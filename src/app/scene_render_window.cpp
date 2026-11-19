@@ -63,7 +63,7 @@ private:
 
 SceneRenderWindow::SceneRenderWindow(scene::Scene loadedScene,diagnostics::RunLogger& logger,QString imageOutputPath,QWidget* parent)
     :QMainWindow(parent),scene_(std::move(loadedScene)) {
-    {auto timing=logger.scope(QStringLiteral("buildSceneBvh · construction CPU médiane"));bvh_=render::buildSceneBvh(scene_);}
+    {auto timing=logger.scope(QStringLiteral("buildSceneBvh · SAH 12 bins → BVH4 (CPU)"));bvh_=render::buildSceneBvh(scene_);}
     logger.note(QStringLiteral("BVH CPU prêt · %1 triangles · %2 nœuds.").arg(bvh_.triangles.size()).arg(bvh_.nodes.size()));
     setWindowTitle(QStringLiteral("LumaTrace — %1").arg(scene_.name));
     viewport_=new Viewport(scene_,bvh_,logger,std::move(imageOutputPath),viewportStatus_,[this](const QString& text){statusBar()->showMessage(text);},this);
