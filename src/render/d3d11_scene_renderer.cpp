@@ -118,9 +118,9 @@ std::array<float,16> cameraMatrix(const scene::Bounds& bounds, float camera[3]) 
 struct D3D11SceneRenderer::Impl {
     struct Draw { ComPtr<ID3D11Buffer> vb, ib; UINT indexCount=0, triangleBase=0; int material=0; };
     ComPtr<ID3D11Device> device; ComPtr<ID3D11DeviceContext> context; ComPtr<IDXGISwapChain1> swap;
-    ComPtr<ID3D11RenderTargetView> backRtv, idRtv; ComPtr<ID3D11Texture2D> backBuffer, imageStaging, idTexture, depthTexture;
+    ComPtr<ID3D11RenderTargetView> backRtv, idRtv, msaaRtv; ComPtr<ID3D11Texture2D> backBuffer, imageStaging, idTexture, depthTexture, msaaColorTexture, msaaDepthTexture;
     ComPtr<ID3D11ShaderResourceView> idSrv; ComPtr<ID3D11UnorderedAccessView> idUav, visibleUav, radianceUav;
-    ComPtr<ID3D11DepthStencilView> depthDsv; ComPtr<ID3D11DepthStencilState> depthWrite, depthRead;
+    ComPtr<ID3D11DepthStencilView> depthDsv, msaaDepthDsv; UINT msaaSamples=1, msaaQuality=0; ComPtr<ID3D11DepthStencilState> depthWrite, depthRead;
     ComPtr<ID3D11BlendState> alphaBlend; ComPtr<ID3D11RasterizerState> rasterState, rasterDoubleSided;
     ComPtr<ID3D11VertexShader> preVs, rasterVs; ComPtr<ID3D11PixelShader> prePs, rasterPs;
     ComPtr<ID3D11ComputeShader> collectCs, shadeCs; ComPtr<ID3D11InputLayout> inputLayout;
@@ -283,6 +283,26 @@ struct D3D11SceneRenderer::Impl {
         if(FAILED(swap->GetBuffer(0,IID_PPV_ARGS(&backBuffer)))||FAILED(device->CreateRenderTargetView(backBuffer.Get(),nullptr,&backRtv))){error=QStringLiteral("D3D11 : backbuffer indisponible.");return false;}
         D3D11_TEXTURE2D_DESC imageDesc{};backBuffer->GetDesc(&imageDesc);imageDesc.Usage=D3D11_USAGE_STAGING;imageDesc.BindFlags=0;imageDesc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;imageDesc.MiscFlags=0;
         if(FAILED(device->CreateTexture2D(&imageDesc,nullptr,&imageStaging))){error=QStringLiteral("D3D11 : staging de capture image impossible.");return false;}
+        // Select the largest common MSAA sample count for the color and depth formats,
+        // and use the highest common quality index exposed by the adapter.
+        const DXGI_FORMAT colorFormat=DXGI_FORMAT_B8G8R8A8_UNORM;
+        const DXGI_FORMAT depthFormat=DXGI_FORMAT_D24_UNORM_S8_UINT;
+        for(UINT count=32;count>=2;count/=2){UINT colorLevels=0,depthLevels=0;
+            if(SUCCEEDED(device->CheckMultisampleQualityLevels(colorFormat,count,&colorLevels))
+               &&SUCCEEDED(device->CheckMultisampleQualityLevels(depthFormat,count,&depthLevels))
+               &&colorLevels>0&&depthLevels>0){msaaSamples=count;msaaQuality=std::min(colorLevels,depthLevels)-1;break;}
+        }
+        if(msaaSamples>1){
+            D3D11_TEXTURE2D_DESC ms{};ms.Width=kWidth;ms.Height=kHeight;ms.MipLevels=1;ms.ArraySize=1;ms.Format=colorFormat;ms.SampleDesc.Count=msaaSamples;ms.SampleDesc.Quality=msaaQuality;ms.Usage=D3D11_USAGE_DEFAULT;ms.BindFlags=D3D11_BIND_RENDER_TARGET;
+            if(FAILED(device->CreateTexture2D(&ms,nullptr,&msaaColorTexture))||FAILED(device->CreateRenderTargetView(msaaColorTexture.Get(),nullptr,&msaaRtv))){
+                msaaColorTexture.Reset();msaaRtv.Reset();msaaSamples=1;msaaQuality=0;
+            }else{
+                ms.Format=depthFormat;ms.BindFlags=D3D11_BIND_DEPTH_STENCIL;
+                if(FAILED(device->CreateTexture2D(&ms,nullptr,&msaaDepthTexture))||FAILED(device->CreateDepthStencilView(msaaDepthTexture.Get(),nullptr,&msaaDepthDsv))){
+                    msaaColorTexture.Reset();msaaRtv.Reset();msaaDepthTexture.Reset();msaaDepthDsv.Reset();msaaSamples=1;msaaQuality=0;
+                }
+            }
+        }
         D3D11_TEXTURE2D_DESC td{};td.Width=kWidth;td.Height=kHeight;td.MipLevels=1;td.ArraySize=1;td.Format=DXGI_FORMAT_R32_UINT;td.SampleDesc.Count=1;td.Usage=D3D11_USAGE_DEFAULT;td.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_UNORDERED_ACCESS;
         if(FAILED(device->CreateTexture2D(&td,nullptr,&idTexture))||FAILED(device->CreateRenderTargetView(idTexture.Get(),nullptr,&idRtv))||FAILED(device->CreateShaderResourceView(idTexture.Get(),nullptr,&idSrv))||FAILED(device->CreateUnorderedAccessView(idTexture.Get(),nullptr,&idUav))){error=QStringLiteral("D3D11 : cible ID triangle impossible.");return false;}
         td.Format=DXGI_FORMAT_D24_UNORM_S8_UINT;td.BindFlags=D3D11_BIND_DEPTH_STENCIL;
@@ -305,7 +325,7 @@ struct D3D11SceneRenderer::Impl {
         if(FAILED(device->CreateDepthStencilState(&ds,&depthWrite))){error=QStringLiteral("D3D11 : état profondeur impossible.");return false;}
         ds.DepthWriteMask=D3D11_DEPTH_WRITE_MASK_ZERO;
         if(FAILED(device->CreateDepthStencilState(&ds,&depthRead))){error=QStringLiteral("D3D11 : état lecture profondeur impossible.");return false;}
-        D3D11_RASTERIZER_DESC rs{};rs.FillMode=D3D11_FILL_SOLID;rs.CullMode=D3D11_CULL_BACK;rs.DepthClipEnable=TRUE;
+        D3D11_RASTERIZER_DESC rs{};rs.FillMode=D3D11_FILL_SOLID;rs.CullMode=D3D11_CULL_BACK;rs.DepthClipEnable=TRUE;rs.MultisampleEnable=TRUE;
         if(FAILED(device->CreateRasterizerState(&rs,&rasterState))){error=QStringLiteral("D3D11 : rasterizer impossible.");return false;}
         rs.CullMode=D3D11_CULL_NONE;
         if(FAILED(device->CreateRasterizerState(&rs,&rasterDoubleSided))){error=QStringLiteral("D3D11 : rasterizer double face impossible.");return false;}
@@ -334,8 +354,8 @@ bool D3D11SceneRenderer::initialize(HWND hwnd,const scene::Scene& scene,const Sc
     ComPtr<IDXGIDevice> xd;ComPtr<IDXGIAdapter> ad;DXGI_ADAPTER_DESC desc{};QString gpu=warp?QStringLiteral("WARP logiciel"):QStringLiteral("GPU matériel");
     if(!warp&&SUCCEEDED(x.device.As(&xd))&&SUCCEEDED(xd->GetAdapter(&ad))&&SUCCEEDED(ad->GetDesc(&desc)))gpu=QString::fromWCharArray(desc.Description).trimmed();
     const unsigned major=unsigned(got)>>12,minor=(unsigned(got)>>8)&0xf;
-    status=QStringLiteral("%1 · D3D %2.%3 · 960×540 · Z-prepass + BVH · %4 triangles · 1 échantillon/triangle")
-        .arg(gpu).arg(major).arg(minor).arg(x.triCount);
+    status=QStringLiteral("%1 · D3D %2.%3 · 960×540 · Z-prepass + BVH · %4 triangles · MSAA %5× / qualité %6")
+        .arg(gpu).arg(major).arg(minor).arg(x.triCount).arg(x.msaaSamples).arg(x.msaaQuality);
     return true;
 }
 
@@ -379,16 +399,16 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh,QI
     ID3D11SamplerState* nullSampler=nullptr;x.context->CSSetShader(nullptr,nullptr,0);std::array<ID3D11ShaderResourceView*,6> nullComputeSrvs{};x.context->CSSetShaderResources(1,UINT(nullComputeSrvs.size()),nullComputeSrvs.data());x.context->CSSetSamplers(0,1,&nullSampler);x.context->CSSetUnorderedAccessViews(0,2,std::array<ID3D11UnorderedAccessView*,2>{}.data(),nullptr);
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("raster Direct3D · textures, normales, alpha et affichage")));
-    ID3D11RenderTargetView* color=x.backRtv.Get();x.context->OMSetRenderTargets(1,&color,x.depthDsv.Get());x.context->ClearRenderTargetView(x.backRtv.Get(),clear);x.context->OMSetDepthStencilState(x.depthRead.Get(),0);x.context->VSSetShader(x.rasterVs.Get(),nullptr,0);x.context->PSSetShader(x.rasterPs.Get(),nullptr,0);ID3D11ShaderResourceView* lightSrv=x.radianceSrv.Get();x.context->PSSetShaderResources(5,1,&lightSrv); AreaLightConstants alc{}; alc.position[0]=lc.light[0];alc.position[1]=lc.light[1];alc.position[2]=lc.light[2];alc.intensity=lc.intensity;alc.color[0]=lc.lightColor[0];alc.color[1]=lc.lightColor[1];alc.color[2]=lc.lightColor[2];alc.radius=lc.angularRadius;updateBuffer(x.context.Get(),x.areaLightCb.Get(),alc);ID3D11Buffer* areaLight=x.areaLightCb.Get();x.context->PSSetConstantBuffers(2,1,&areaLight);ID3D11SamplerState* samp=x.sampler.Get();x.context->PSSetSamplers(0,1,&samp);
+    ID3D11RenderTargetView* color=x.msaaSamples>1?x.msaaRtv.Get():x.backRtv.Get();ID3D11DepthStencilView* rasterDepth=x.msaaSamples>1?x.msaaDepthDsv.Get():x.depthDsv.Get();x.context->OMSetRenderTargets(1,&color,rasterDepth);x.context->ClearRenderTargetView(color,clear);if(x.msaaSamples>1)x.context->ClearDepthStencilView(rasterDepth,D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL,1.f,0);x.context->OMSetDepthStencilState(x.depthWrite.Get(),0);x.context->VSSetShader(x.rasterVs.Get(),nullptr,0);x.context->PSSetShader(x.rasterPs.Get(),nullptr,0);ID3D11ShaderResourceView* lightSrv=x.radianceSrv.Get();x.context->PSSetShaderResources(5,1,&lightSrv); AreaLightConstants alc{}; alc.position[0]=lc.light[0];alc.position[1]=lc.light[1];alc.position[2]=lc.light[2];alc.intensity=lc.intensity;alc.color[0]=lc.lightColor[0];alc.color[1]=lc.lightColor[1];alc.color[2]=lc.lightColor[2];alc.radius=lc.angularRadius;updateBuffer(x.context.Get(),x.areaLightCb.Get(),alc);ID3D11Buffer* areaLight=x.areaLightCb.Get();x.context->PSSetConstantBuffers(2,1,&areaLight);ID3D11SamplerState* samp=x.sampler.Get();x.context->PSSetSamplers(0,1,&samp);
     for(size_t i=0;i<scene.primitives.size()&&i<x.draws.size();++i){const auto& p=scene.primitives[int(i)];const auto& d=x.draws[i];if(!d.vb||!d.ib)continue;const int mi=d.material;const scene::Material* m=mi>=0?&scene.materials[mi]:nullptr;x.context->RSSetState(m&&m->doubleSided?x.rasterDoubleSided.Get():x.rasterState.Get());RasterCamera rc{};std::copy(x.vp.begin(),x.vp.end(),rc.vp);std::copy(p.worldTransform.begin(),p.worldTransform.end(),rc.world);const auto nm=normalMatrix(p.worldTransform);std::copy(nm.begin(),nm.end(),rc.normalWorld);rc.camera[0]=x.camera[0];rc.camera[1]=x.camera[1];rc.camera[2]=x.camera[2];rc.camera[3]=1;updateBuffer(x.context.Get(),x.rasterCameraCb.Get(),rc);ID3D11Buffer* cb=x.rasterCameraCb.Get();x.context->VSSetConstantBuffers(0,1,&cb);x.context->PSSetConstantBuffers(0,1,&cb);
         MaterialConstants mc{};mc.baseColor[0]=m?m->baseColor.x:1;mc.baseColor[1]=m?m->baseColor.y:1;mc.baseColor[2]=m?m->baseColor.z:1;mc.baseColor[3]=m?m->baseColor.w:1;mc.surface[0]=m?m->metallic:0;mc.surface[1]=m?m->roughness:.7f;mc.surface[2]=m?m->alphaCutoff:.5f;mc.surface[3]=m?(m->alphaMode==QStringLiteral("MASK")?1.f:m->alphaMode==QStringLiteral("BLEND")?2.f:0.f):0.f;mc.emissive[0]=m?m->emissive.x:0;mc.emissive[1]=m?m->emissive.y:0;mc.emissive[2]=m?m->emissive.z:0;mc.details[0]=m?m->normalScale:1.f;mc.details[1]=m?m->occlusionStrength:1.f;mc.triangleBase=d.triangleBase;updateBuffer(x.context.Get(),x.materialCb.Get(),mc);cb=x.materialCb.Get();x.context->PSSetConstantBuffers(1,1,&cb);
         ID3D11ShaderResourceView* maps[5];for(int slot=0;slot<5;++slot)maps[slot]=m&&mi<int(x.materialTextures.size())?x.materialTextures[size_t(mi)][size_t(slot)].Get():x.fallbackTextures[size_t(slot)].Get();x.context->PSSetShaderResources(0,5,maps);
-        UINT stride=sizeof(GpuVertex),offset=0;ID3D11Buffer* vb=d.vb.Get();x.context->IASetVertexBuffers(0,1,&vb,&stride,&offset);x.context->IASetIndexBuffer(d.ib.Get(),DXGI_FORMAT_R32_UINT,0);if(mc.surface[3]==2){const float blend[4]={0,0,0,0};x.context->OMSetBlendState(x.alphaBlend.Get(),blend,0xffffffff);}else x.context->OMSetBlendState(nullptr,nullptr,0xffffffff);x.context->DrawIndexed(d.indexCount,0,0);
+        UINT stride=sizeof(GpuVertex),offset=0;ID3D11Buffer* vb=d.vb.Get();x.context->IASetVertexBuffers(0,1,&vb,&stride,&offset);x.context->IASetIndexBuffer(d.ib.Get(),DXGI_FORMAT_R32_UINT,0);x.context->OMSetDepthStencilState(mc.surface[3]==2?x.depthRead.Get():x.depthWrite.Get(),0);if(mc.surface[3]==2){const float blend[4]={0,0,0,0};x.context->OMSetBlendState(x.alphaBlend.Get(),blend,0xffffffff);}else x.context->OMSetBlendState(nullptr,nullptr,0xffffffff);x.context->DrawIndexed(d.indexCount,0,0);
     }
     if(x.emitterVb&&x.emitterIb){
         RasterCamera rc{};std::copy(x.vp.begin(),x.vp.end(),rc.vp);auto world=identity();world[0]=world[5]=world[10]=.24f;world[12]=lc.light[0];world[13]=lc.light[1];world[14]=lc.light[2];std::copy(world.begin(),world.end(),rc.world);auto nm=identity();std::copy(nm.begin(),nm.end(),rc.normalWorld);rc.camera[0]=x.camera[0];rc.camera[1]=x.camera[1];rc.camera[2]=x.camera[2];rc.camera[3]=1;updateBuffer(x.context.Get(),x.rasterCameraCb.Get(),rc);ID3D11Buffer* cb=x.rasterCameraCb.Get();x.context->VSSetConstantBuffers(0,1,&cb);x.context->PSSetConstantBuffers(0,1,&cb);
         MaterialConstants mc{};mc.baseColor[0]=mc.baseColor[1]=mc.baseColor[2]=mc.baseColor[3]=1.f;mc.surface[1]=.3f;mc.details[2]=1.f;updateBuffer(x.context.Get(),x.materialCb.Get(),mc);cb=x.materialCb.Get();x.context->PSSetConstantBuffers(1,1,&cb);
-        ID3D11ShaderResourceView* maps[5];for(int i=0;i<5;++i)maps[i]=x.fallbackTextures[i].Get();x.context->PSSetShaderResources(0,5,maps);x.context->RSSetState(x.rasterDoubleSided.Get());UINT stride=sizeof(GpuVertex),offset=0;ID3D11Buffer* vb=x.emitterVb.Get();x.context->IASetVertexBuffers(0,1,&vb,&stride,&offset);x.context->IASetIndexBuffer(x.emitterIb.Get(),DXGI_FORMAT_R32_UINT,0);x.context->DrawIndexed(x.emitterIndexCount,0,0);
+        ID3D11ShaderResourceView* maps[5];for(int i=0;i<5;++i)maps[i]=x.fallbackTextures[i].Get();x.context->PSSetShaderResources(0,5,maps);x.context->RSSetState(x.rasterDoubleSided.Get());x.context->OMSetDepthStencilState(x.depthWrite.Get(),0);UINT stride=sizeof(GpuVertex),offset=0;ID3D11Buffer* vb=x.emitterVb.Get();x.context->IASetVertexBuffers(0,1,&vb,&stride,&offset);x.context->IASetIndexBuffer(x.emitterIb.Get(),DXGI_FORMAT_R32_UINT,0);x.context->DrawIndexed(x.emitterIndexCount,0,0);
     }
     passTiming.reset();
     x.context->OMSetBlendState(nullptr,nullptr,0xffffffff);x.context->OMSetRenderTargets(0,&none,nullptr);x.context->PSSetShaderResources(0,6,std::array<ID3D11ShaderResourceView*,6>{}.data());
