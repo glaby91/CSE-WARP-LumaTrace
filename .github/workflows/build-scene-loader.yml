@@ -46,7 +46,7 @@ jobs:
       - name: Compile D3D11 compute shaders
         shell: pwsh
         run: |
-          $fxc = Get-ChildItem "$env:ProgramFiles(x86)\Windows Kits\10\bin" -Filter fxc.exe -Recurse |
+          $fxc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter fxc.exe -Recurse |
             Where-Object { $_.FullName -match '\\x64\\fxc\.exe$' } |
             Sort-Object FullName -Descending |
             Select-Object -First 1
