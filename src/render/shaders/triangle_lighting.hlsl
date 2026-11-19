@@ -121,35 +121,59 @@ bool TraceScene(float3 origin, float3 direction, float maxDistance,
         }
         else if (node.childCount > 0)
         {
-            uint sortedIndices[4]; float sortedNear[4]; uint sortedCount = 0;
+            uint sortedIndices[4];
+            float sortedNear[4];
+            sortedIndices[0] = node.child0;
+            sortedIndices[1] = node.child1;
+            sortedIndices[2] = node.child2;
+            sortedIndices[3] = node.child3;
+            uint hitChildren = 0;
             [unroll] for (uint child = 0; child < 4; ++child)
             {
+                float childNear = 1.e30;
                 if (child < node.childCount)
                 {
-                    uint childIndex = child == 0 ? node.child0 :
-                                      child == 1 ? node.child1 :
-                                      child == 2 ? node.child2 : node.child3;
-                    float childNear;
-                    if (HitBounds(Bvh[childIndex], origin, invDir, hitDistance, childNear))
-                    {
-                        uint insertAt = sortedCount;
-                        [loop] while (insertAt > 0 && childNear < sortedNear[insertAt - 1])
-                        {
-                            sortedIndices[insertAt] = sortedIndices[insertAt - 1];
-                            sortedNear[insertAt] = sortedNear[insertAt - 1];
-                            --insertAt;
-                        }
-                        sortedIndices[insertAt] = childIndex;
-                        sortedNear[insertAt] = childNear;
-                        ++sortedCount;
-                    }
+                    if (!HitBounds(Bvh[sortedIndices[child]], origin, invDir,
+                                   hitDistance, childNear))
+                        childNear = 1.e30;
                 }
+                sortedNear[child] = childNear;
+                if (childNear < 1.e30) ++hitChildren;
             }
-            if (top + sortedCount <= 64)
+            // Four-child sorting network avoids variable-index insertion loops
+            // unsupported by the legacy Windows Shader Model 5 compiler.
+            uint swapIndex;
+            float swapNear;
+            if (sortedNear[0] > sortedNear[1])
+            {
+                swapNear = sortedNear[0]; sortedNear[0] = sortedNear[1]; sortedNear[1] = swapNear;
+                swapIndex = sortedIndices[0]; sortedIndices[0] = sortedIndices[1]; sortedIndices[1] = swapIndex;
+            }
+            if (sortedNear[2] > sortedNear[3])
+            {
+                swapNear = sortedNear[2]; sortedNear[2] = sortedNear[3]; sortedNear[3] = swapNear;
+                swapIndex = sortedIndices[2]; sortedIndices[2] = sortedIndices[3]; sortedIndices[3] = swapIndex;
+            }
+            if (sortedNear[0] > sortedNear[2])
+            {
+                swapNear = sortedNear[0]; sortedNear[0] = sortedNear[2]; sortedNear[2] = swapNear;
+                swapIndex = sortedIndices[0]; sortedIndices[0] = sortedIndices[2]; sortedIndices[2] = swapIndex;
+            }
+            if (sortedNear[1] > sortedNear[3])
+            {
+                swapNear = sortedNear[1]; sortedNear[1] = sortedNear[3]; sortedNear[3] = swapNear;
+                swapIndex = sortedIndices[1]; sortedIndices[1] = sortedIndices[3]; sortedIndices[3] = swapIndex;
+            }
+            if (sortedNear[1] > sortedNear[2])
+            {
+                swapNear = sortedNear[1]; sortedNear[1] = sortedNear[2]; sortedNear[2] = swapNear;
+                swapIndex = sortedIndices[1]; sortedIndices[1] = sortedIndices[2]; sortedIndices[2] = swapIndex;
+            }
+            if (top + hitChildren <= 64)
             {
                 // The stack is LIFO: push far-to-near so the closest child is
                 // visited first and tightens hitDistance for the remaining nodes.
-                [loop] for (uint child = sortedCount; child > 0; --child)
+                [loop] for (uint child = hitChildren; child > 0; --child)
                 {
                     stack[top] = sortedIndices[child - 1];
                     stackNear[top] = sortedNear[child - 1];
