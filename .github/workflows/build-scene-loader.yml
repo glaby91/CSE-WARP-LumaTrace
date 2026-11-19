@@ -6,6 +6,7 @@ on:
     paths:
       - 'CMakeLists.txt'
       - 'src/**'
+      - 'tools/**'
       - 'assets/vehicles/porsche_930/scene/**'
       - '.github/workflows/**'
   pull_request:
@@ -13,6 +14,7 @@ on:
     paths:
       - 'CMakeLists.txt'
       - 'src/**'
+      - 'tools/**'
       - 'assets/vehicles/porsche_930/scene/**'
       - '.github/workflows/**'
   workflow_dispatch:
@@ -61,18 +63,27 @@ jobs:
       - name: Deploy Qt runtime beside the executable
         run: windeployqt --release --no-translations build/Release/CSE_WARP_LumaTrace.exe
       - name: Capture WARP renders for 1, 2 and 4 samples
-        if: env.LUMATRACE_SCENE_READY == 'true'
         shell: pwsh
         run: |
           $env:LUMATRACE_FORCE_WARP = '1'
           $exe = (Resolve-Path 'build/Release/CSE_WARP_LumaTrace.exe').Path
           $root = Join-Path $env:RUNNER_TEMP 'LumaTrace-benchmark'
           New-Item -ItemType Directory -Force -Path $root | Out-Null
+          if ($env:LUMATRACE_SCENE_READY -eq 'true') {
+            $scene = 'assets/vehicles/porsche_930/scene/scene.json'
+            Write-Host 'Benchmark scene: Porsche 930.'
+          } else {
+            $sceneDir = Join-Path $env:RUNNER_TEMP 'LumaTrace-synthetic-scene'
+            python tools/generate_benchmark_scene.py --out-dir $sceneDir
+            if ($LASTEXITCODE -ne 0) { throw 'Could not generate the synthetic benchmark scene.' }
+            $scene = Join-Path $sceneDir 'scene.json'
+            Write-Warning 'Benchmark scene: synthetic 241,260-triangle mesh; Porsche LFS objects are missing.'
+          }
           $metrics = @()
           $images = @()
           foreach ($sample in @(1, 2, 4)) {
             $sampleRoot = Join-Path $root "samples-$sample"
-            $process = Start-Process -FilePath $exe -ArgumentList @("--samples=$sample", "--output-dir=$sampleRoot", '--exit-after-render') -Wait -PassThru
+            $process = Start-Process -FilePath $exe -ArgumentList @("--samples=$sample", "--output-dir=$sampleRoot", '--exit-after-render', $scene) -Wait -PassThru
             if ($process.ExitCode -ne 0) { throw "LumaTrace WARP capture for $sample sample(s) exited with $($process.ExitCode)." }
             $image = Get-ChildItem (Join-Path $sampleRoot 'renders') -Filter "*_${sample}_*" | Select-Object -First 1
             $log = Get-ChildItem (Join-Path $sampleRoot 'logs') -Filter '*.log' | Select-Object -First 1
@@ -114,7 +125,6 @@ jobs:
           if-no-files-found: error
       - name: Upload WARP benchmark images and timings
         uses: actions/upload-artifact@v4
-        if: env.LUMATRACE_SCENE_READY == 'true'
         with:
           name: CSE-WARP-LumaTrace-warp-benchmark
           path: ${{ runner.temp }}/LumaTrace-benchmark/
