@@ -180,14 +180,15 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
     uint samples = clamp(SamplesPerTriangle, 1, 4);
     float3 accumulatedDiffuse = 0.0;
     float3 accumulatedReflection = 0.0;
+    // These values are constant for every sample of this triangle.
+    float3 n = normalize(tri.n0 + tri.n1 + tri.n2);
+    float3 sceneCenter = (Bvh[0].minimum + Bvh[0].maximum) * 0.5;
+    float3 lightForward = normalize(sceneCenter - LightPosition);
+    float3 lightRight = normalize(cross(lightForward, float3(0.0, 1.0, 0.0)));
+    float3 lightUp = normalize(cross(lightRight, lightForward));
     [loop] for (uint sampleIndex = 0; sampleIndex < samples; ++sampleIndex)
     {
         float3 p = SamplePoint(tri, sampleIndex, samples);
-        float3 n = normalize(tri.n0 + tri.n1 + tri.n2);
-        float3 sceneCenter = (Bvh[0].minimum + Bvh[0].maximum) * 0.5;
-        float3 lightForward = normalize(sceneCenter - LightPosition);
-        float3 lightRight = normalize(cross(lightForward, float3(0.0, 1.0, 0.0)));
-        float3 lightUp = normalize(cross(lightRight, lightForward));
         float2 lightSample = SampleAreaLight(sampleIndex, samples);
         float3 lightSamplePosition = LightPosition + LightRadius *
             (lightRight * lightSample.x + lightUp * lightSample.y);
