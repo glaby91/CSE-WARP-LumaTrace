@@ -22,6 +22,16 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - name: Report scene asset hydration
+        shell: pwsh
+        run: |
+          $asset = 'assets/vehicles/porsche_930/scene/porsche_930.glb'
+          $header = Get-Content $asset -TotalCount 1
+          if ($header -like 'version https://git-lfs.github.com/spec/v1') {
+            Write-Warning 'Git LFS payloads are unavailable on this branch checkout. The Qt/D3D11 executable will compile, but the packaged scene is not runnable until the GLB and textures are uploaded to LFS.'
+          } else {
+            Write-Host 'Scene model is hydrated.'
+          }
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
@@ -35,9 +45,9 @@ jobs:
         run: cmake --build build --config Release --target CSE_WARP_LumaTrace --parallel 2
       - name: Deploy Qt runtime beside the executable
         run: windeployqt --release --no-translations build/Release/CSE_WARP_LumaTrace.exe
-      - name: Upload runnable Windows build
+      - name: Upload Windows compile artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CSE-WARP-LumaTrace-windows-x64
+          name: CSE-WARP-LumaTrace-windows-x64-compile
           path: build/Release/
           if-no-files-found: error
