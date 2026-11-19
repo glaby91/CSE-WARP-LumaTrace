@@ -32,7 +32,8 @@ static_assert(sizeof(GpuVertex) == 64);
 struct alignas(16) RasterCamera { float vp[16]; float world[16]; float normalWorld[16]; float camera[4]; };
 struct alignas(16) PrepassCamera { float vp[16]; float world[16]; std::uint32_t triangleBase, alphaMode; float alphaCutoff, baseAlpha; };
 struct alignas(16) MaterialConstants { float baseColor[4], surface[4], emissive[4], details[4]; std::uint32_t triangleBase, padding[3]; };
-struct alignas(16) LightConstants { std::uint32_t width, height, triangleCount, samples; float camera[3], epsilon; float light[3], intensity; };
+struct alignas(16) LightConstants { std::uint32_t width, height, triangleCount, samples; float camera[3], epsilon; float light[3], intensity; float lightColor[3], angularRadius; };
+static_assert(sizeof(LightConstants) == 64);
 struct GpuMaterial { float baseColor[4]; float metallic, roughness; float pad[2]; };
 
 template<class T> bool makeBuffer(ID3D11Device* d, UINT bind, UINT misc, UINT stride, const T* data, size_t count, ComPtr<ID3D11Buffer>& out) {
@@ -91,7 +92,7 @@ std::array<float,16> cameraMatrix(const scene::Bounds& bounds, float camera[3]) 
     const float dx=bounds.maximum.x-bounds.minimum.x, dy=bounds.maximum.y-bounds.minimum.y, dz=bounds.maximum.z-bounds.minimum.z;
     const float radius=std::max(1.f,std::sqrt(dx*dx+dy*dy+dz*dz)*.5f);
     float fx=.85f, fy=.48f, fz=1.f; normalize(fx,fy,fz);
-    camera[0]=center.x+fx*radius*2.5f; camera[1]=center.y+fy*radius*2.5f; camera[2]=center.z+fz*radius*2.5f;
+    camera[0]=center.x+fx*radius*2.0f; camera[1]=center.y+fy*radius*2.0f; camera[2]=center.z+fz*radius*2.0f;
     float zx=center.x-camera[0], zy=center.y-camera[1], zz=center.z-camera[2]; normalize(zx,zy,zz);
     float xx=zz, xy=0.f, xz=-zx; normalize(xx,xy,xz);
     const float yx=zy*xz-zz*xy, yy=zz*xx-zx*xz, yz=zx*xy-zy*xx;
@@ -283,7 +284,7 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · marquage des triangles visibles")));
     x.context->ClearUnorderedAccessViewUint(x.visibleUav.Get(),zero);
-    LightConstants lc{};lc.width=kWidth;lc.height=kHeight;lc.triangleCount=x.triCount;lc.samples=x.samples;lc.camera[0]=x.camera[0];lc.camera[1]=x.camera[1];lc.camera[2]=x.camera[2];lc.epsilon=std::max(1.e-4f,std::sqrt(std::pow(scene.bounds.maximum.x-scene.bounds.minimum.x,2.f)+std::pow(scene.bounds.maximum.y-scene.bounds.minimum.y,2.f)+std::pow(scene.bounds.maximum.z-scene.bounds.minimum.z,2.f))*1.e-5f);lc.light[0]=-.45f;lc.light[1]=.82f;lc.light[2]=.34f;normalize(lc.light[0],lc.light[1],lc.light[2]);lc.intensity=1.f;updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
+    LightConstants lc{};lc.width=kWidth;lc.height=kHeight;lc.triangleCount=x.triCount;lc.samples=x.samples;lc.camera[0]=x.camera[0];lc.camera[1]=x.camera[1];lc.camera[2]=x.camera[2];lc.epsilon=std::max(1.e-4f,std::sqrt(std::pow(scene.bounds.maximum.x-scene.bounds.minimum.x,2.f)+std::pow(scene.bounds.maximum.y-scene.bounds.minimum.y,2.f)+std::pow(scene.bounds.maximum.z-scene.bounds.minimum.z,2.f))*1.e-5f);lc.light[0]=-.45f;lc.light[1]=.82f;lc.light[2]=.34f;normalize(lc.light[0],lc.light[1],lc.light[2]);lc.intensity=1.8f;lc.lightColor[0]=1.f;lc.lightColor[1]=.93f;lc.lightColor[2]=.82f;lc.angularRadius=.14f;updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
     ID3D11ShaderResourceView* ids=x.idSrv.Get();x.context->CSSetShaderResources(0,1,&ids);ID3D11UnorderedAccessView* vis=x.visibleUav.Get();x.context->CSSetUnorderedAccessViews(0,1,&vis,nullptr);x.context->CSSetShader(x.collectCs.Get(),nullptr,0);x.context->Dispatch((kWidth+7)/8,(kHeight+7)/8,1);
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · rayons d'ombre/réflexion et parcours BVH")));
@@ -309,8 +310,12 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
             QImage image(int(kWidth),int(kHeight),QImage::Format_ARGB32);
             for(UINT y=0;y<kHeight;++y)std::memcpy(image.scanLine(int(y)),static_cast<const char*>(map.pData)+size_t(y)*map.RowPitch,size_t(kWidth)*4);
             x.context->Unmap(x.imageStaging.Get(),0);
-            if(image.save(x.imageOutputPath, "PNG")){if(x.logger)x.logger->note(QStringLiteral("Image exportée : ")+x.imageOutputPath);}
-            else if(x.logger)x.logger->note(QStringLiteral("ERREUR : l'image PNG n'a pas pu être écrite : ")+x.imageOutputPath);
+            const QFileInfo baseInfo(x.imageOutputPath);
+            const QString rayLabel=x.samples==1?QStringLiteral("rayon"):QStringLiteral("rayons");
+            const QString samplePath=QDir(baseInfo.path()).filePath(QStringLiteral("%1_%2_%3.%4")
+                .arg(baseInfo.completeBaseName()).arg(x.samples).arg(rayLabel,baseInfo.suffix()));
+            if(image.save(samplePath, "PNG")){if(x.logger)x.logger->note(QStringLiteral("Image exportée (%1 %2) : ").arg(x.samples).arg(rayLabel)+samplePath);}
+            else if(x.logger)x.logger->note(QStringLiteral("ERREUR : l'image PNG n'a pas pu être écrite : ")+samplePath);
         }else if(x.logger)x.logger->note(QStringLiteral("ERREUR : lecture staging impossible pour l'export PNG."));
         x.imageExportPending=false;
     }

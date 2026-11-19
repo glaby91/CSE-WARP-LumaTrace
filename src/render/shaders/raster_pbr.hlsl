@@ -84,7 +84,7 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     float3 viewDirection = normalize(CameraPosition.xyz - input.worldPosition);
     float3 keyDirection = normalize(float3(-0.45, 0.82, 0.34));
     float ndotl = saturate(dot(n, keyDirection));
-    float3 diffuse = base.rgb * (0.10 + ndotl * triLight.rgb) * (1.0 - metallic) * ao;
+    float3 diffuse = base.rgb * (0.18 + ndotl * triLight.rgb) * (1.0 - metallic) * ao;
     float3 halfVector = normalize(keyDirection + viewDirection);
     float specularPower = lerp(96.0, 4.0, roughness);
     float3 specular = lerp(float3(0.04, 0.04, 0.04), base.rgb, metallic)
