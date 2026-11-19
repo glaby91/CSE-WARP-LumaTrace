@@ -13,10 +13,13 @@ Ce dépôt est un espace de conception et de prototypage. La piste décrite ici 
 - [Chargeur de scènes et contrat glTF](docs/SCENE_LOADER.md)
 - [Fenêtre de rendu et profil HD 620](docs/RENDER_WINDOW_HD620.md)
 - [Modèle de test Porsche 911 (930) Turbo](assets/vehicles/porsche_930/README.md)
+- [Design rouge rubis et bandes de course](assets/vehicles/porsche_930/design/DESIGN.md)
 
 ## Chargeur
 
 Le premier module C++/Qt du dépôt est `LumaTraceSceneLoader`. Il reprend le chargement transactionnel de V17.551 et charge le manifeste de la scène Porsche, le GLB 2.0, les transformations glTF, les buffers triangulaires, les attributs de sommet, les matériaux et les textures.
+
+Le GLB 1K et ses 27 textures sont suivis avec Git LFS. Le workflow Windows vérifie que les données sont présentes, charge la scène et exporte des rendus WARP pour 1, 2 et 4 échantillons lumineux par triangle.
 
 Au lancement, une petite fenêtre de diagnostic façon console détaille et chronomètre le chargement, la construction du BVH et chaque passe D3D11/HLSL. Elle écrit le même journal sur disque. Une seconde fenêtre Qt affiche le rendu 960 × 540 ; le premier rendu complet est exporté en PNG à côté des journaux dans le dossier de données utilisateur. Le viewport utilise la pré-passe profondeur/ID, le calcul d'ombres et de reflets par rayons HLSL parcourant le BVH, puis le raster texturé avec cartes normales. Le profil démarre à un échantillon lumineux par triangle ; la barre d'outils permet d'en choisir un, deux ou quatre. Les modules et limites du prototype sont décrits dans [la note du rendu HD 620](docs/RENDER_WINDOW_HD620.md).
 
