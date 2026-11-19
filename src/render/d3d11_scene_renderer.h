@@ -13,6 +13,7 @@
 #include <memory>
 #include <cstdint>
 #include <QString>
+#include <QImage>
 
 namespace lumatrace::render {
 
@@ -26,7 +27,8 @@ public:
 
     bool initialize(HWND hwnd, const scene::Scene& scene, const SceneBvh& bvh,
                     diagnostics::RunLogger& logger, QString imageOutputPath, QString& status);
-    void render(const scene::Scene& scene, const SceneBvh& bvh);
+    void render(const scene::Scene& scene, const SceneBvh& bvh, QImage* capturedFrame = nullptr);
+    void setOrbitAngleDegrees(float degrees);
     void setSamplesPerTriangle(std::uint32_t samples);
 
 private:

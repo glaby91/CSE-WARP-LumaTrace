@@ -35,12 +35,10 @@ Texture2D<float4> EmissiveMap : register(t4);
 StructuredBuffer<float4> TriangleLighting : register(t5);
 SamplerState MaterialSampler : register(s0);
 
-cbuffer FocusedSpotConstants : register(b2)
+cbuffer AreaLightConstants : register(b2)
 {
-    float3 SpotPosition; float SpotIntensity;
-    float3 SpotDirection; float SpotRange;
-    float3 SpotColor; float SpotInnerCos;
-    float SpotOuterCos; float3 SpotPadding;
+    float3 LightPosition; float LightIntensity;
+    float3 LightColor; float LightRadius;
 };
 
 VSOutput VSMain(VSInput input)
@@ -69,6 +67,7 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     float4 base = BaseColorMap.Sample(MaterialSampler, input.uv) * BaseColorFactor * input.color;
     const uint alphaMode = (uint)SurfaceFactors.w;
     if (alphaMode == 1 && base.a < SurfaceFactors.z) discard;
+    if (DetailFactors.z > 0.5) { float3 glow=float3(12.0, 9.0, 5.5); return float4(pow(glow/(1.0+glow),1.0/2.2),1.0); }
 
     float4 mr = MetallicRoughnessMap.Sample(MaterialSampler, input.uv);
     float metallic = saturate(SurfaceFactors.x * mr.b);
@@ -90,35 +89,21 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     uint triangleId = TriangleBase + primitiveId;
     float4 triLight = TriangleLighting[triangleId];
     float3 viewDirection = normalize(CameraPosition.xyz - input.worldPosition);
-    float3 fromSpot = input.worldPosition - SpotPosition;
-    float spotDistance = length(fromSpot);
-    float3 spotRay = spotDistance > 1.e-5 ? fromSpot / spotDistance : normalize(SpotDirection);
-    float coneCos = dot(spotRay, normalize(SpotDirection));
-    float cone = smoothstep(SpotOuterCos, SpotInnerCos, coneCos);
-    float rangeFade = saturate(1.0 - spotDistance / max(SpotRange, 1.e-4));
-    float spotEnergy = SpotIntensity * cone * rangeFade * rangeFade;
-    float3 spotToSurface = -spotRay;
-    float spotNdotL = saturate(dot(n, spotToSurface));
-    float3 spotHalfVector = normalize(spotToSurface + viewDirection);
-    float3 keyDirection = normalize(float3(-0.55, 0.74, 0.38));
+    float3 toLight = LightPosition - input.worldPosition;
+    float lightDistance = max(length(toLight), 1.e-4);
+    float3 lightDirection = toLight / lightDistance;
+    float ndotl = saturate(dot(n, lightDirection));
     float3 fillDirection = normalize(float3(0.65, 0.35, -0.67));
-    float ndotl = saturate(dot(n, keyDirection));
     float fillNdotL = saturate(dot(n, fillDirection));
-    // Subtle cyan studio fill/rim, intentionally unshadowed to avoid a second
-    // BVH ray per sample. The warm key remains the shadowed, ray-traced light.
     float3 fill = fillNdotL * float3(0.025, 0.075, 0.09);
     float3 diffuse = base.rgb * (0.18 + ndotl * triLight.rgb + fill) * (1.0 - metallic) * ao;
-    float3 halfVector = normalize(keyDirection + viewDirection);
+    float3 halfVector = normalize(lightDirection + viewDirection);
     float specularPower = lerp(96.0, 4.0, roughness);
     float3 specular = lerp(float3(0.04, 0.04, 0.04), base.rgb, metallic)
                     * pow(saturate(dot(n, halfVector)), specularPower)
-                    * lerp(1.0, 0.18, roughness);
-    float3 focusedDiffuse = base.rgb * SpotColor * spotEnergy * spotNdotL * (1.0 - metallic) * ao;
-    float3 focusedSpecular = lerp(float3(0.04, 0.04, 0.04), base.rgb, metallic)
-                           * SpotColor * spotEnergy
-                           * pow(saturate(dot(n, spotHalfVector)), specularPower)
-                           * lerp(1.0, 0.18, roughness);
-    float3 color = diffuse + specular + focusedDiffuse + focusedSpecular + emissive
+                    * lerp(1.0, 0.18, roughness) * LightColor * LightIntensity
+                    / max(lightDistance * lightDistance, 0.25);
+    float3 color = diffuse + specular + emissive
                  + triLight.a * metallic * base.rgb * (1.0 - roughness) * 0.25;
     color = pow(saturate(color / (1.0 + color)), 1.0 / 2.2);
     return float4(color, alphaMode == 2 ? base.a : 1.0);

@@ -36,13 +36,8 @@ struct alignas(16) PrepassCamera { float vp[16]; float world[16]; std::uint32_t 
 struct alignas(16) MaterialConstants { float baseColor[4], surface[4], emissive[4], details[4]; std::uint32_t triangleBase, padding[3]; };
 struct alignas(16) LightConstants { std::uint32_t width, height, triangleCount, samples; float camera[3], epsilon; float light[3], intensity; float lightColor[3], angularRadius; };
 static_assert(sizeof(LightConstants) == 64);
-struct alignas(16) FocusedSpotConstants {
-    float position[3], intensity;
-    float direction[3], range;
-    float color[3], innerCos;
-    float outerCos, padding[3];
-};
-static_assert(sizeof(FocusedSpotConstants) == 64);
+struct alignas(16) AreaLightConstants { float position[3], intensity; float color[3], radius; };
+static_assert(sizeof(AreaLightConstants) == 32);
 struct GpuMaterial { float baseColor[4]; float metallic, roughness; float pad[2]; };
 
 template<class T> bool makeBuffer(ID3D11Device* d, UINT bind, UINT misc, UINT stride, const T* data, size_t count, ComPtr<ID3D11Buffer>& out) {
@@ -118,30 +113,6 @@ std::array<float,16> cameraMatrix(const scene::Bounds& bounds, float camera[3]) 
     for(int r=0;r<4;++r)for(int c=0;c<4;++c)for(int k=0;k<4;++k)out[r*4+c]+=v[r*4+k]*p[k*4+c];
     return out;
 }
-FocusedSpotConstants focusedSpotForBounds(const scene::Bounds& bounds) {
-    const scene::Vec3 center = bounds.valid ? scene::Vec3{(bounds.minimum.x+bounds.maximum.x)*.5f,(bounds.minimum.y+bounds.maximum.y)*.5f,(bounds.minimum.z+bounds.maximum.z)*.5f} : scene::Vec3{};
-    const float dx=bounds.maximum.x-bounds.minimum.x, dy=bounds.maximum.y-bounds.minimum.y, dz=bounds.maximum.z-bounds.minimum.z;
-    const float radius=std::max(1.f,std::sqrt(dx*dx+dy*dy+dz*dz)*.5f);
-    float cameraX=.85f,cameraY=.48f,cameraZ=1.f;normalize(cameraX,cameraY,cameraZ);
-    float rightX=-cameraZ,rightZ=cameraX;
-    const float rightLength=std::sqrt(rightX*rightX+rightZ*rightZ);
-    if(rightLength>1.e-8f){rightX/=rightLength;rightZ/=rightLength;}
-    // Place a soft studio spot above the camera-facing hood/front quarter.
-    const float targetX=center.x+rightX*radius*.28f,targetY=center.y,targetZ=center.z+rightZ*radius*.28f;
-    FocusedSpotConstants spot{};
-    spot.position[0]=center.x+cameraX*radius*.90f;
-    spot.position[1]=center.y+radius*1.45f;
-    spot.position[2]=center.z+cameraZ*radius*.90f;
-    spot.direction[0]=targetX-spot.position[0];
-    spot.direction[1]=targetY-spot.position[1];
-    spot.direction[2]=targetZ-spot.position[2];
-    normalize(spot.direction[0],spot.direction[1],spot.direction[2]);
-    spot.intensity=7.0f;
-    spot.range=radius*3.6f;
-    spot.color[0]=1.0f;spot.color[1]=.93f;spot.color[2]=.82f;
-    spot.innerCos=.88f;spot.outerCos=.62f;
-    return spot;
-}
 }
 
 struct D3D11SceneRenderer::Impl {
@@ -153,13 +124,13 @@ struct D3D11SceneRenderer::Impl {
     ComPtr<ID3D11BlendState> alphaBlend; ComPtr<ID3D11RasterizerState> rasterState, rasterDoubleSided;
     ComPtr<ID3D11VertexShader> preVs, rasterVs; ComPtr<ID3D11PixelShader> prePs, rasterPs;
     ComPtr<ID3D11ComputeShader> collectCs, shadeCs; ComPtr<ID3D11InputLayout> inputLayout;
-    ComPtr<ID3D11SamplerState> sampler; ComPtr<ID3D11Buffer> preCameraCb, rasterCameraCb, materialCb, lightCb, focusedSpotCb;
+    ComPtr<ID3D11SamplerState> sampler; ComPtr<ID3D11Buffer> preCameraCb, rasterCameraCb, materialCb, lightCb, areaLightCb;
     ComPtr<ID3D11Buffer> bvhBuffer, triangleBuffer, orderBuffer, materialBuffer, visibleBuffer, radianceBuffer;
     ComPtr<ID3D11ShaderResourceView> bvhSrv, triangleSrv, orderSrv, materialSrv, visibleSrv, radianceSrv;
-    std::vector<Draw> draws; std::vector<std::array<ComPtr<ID3D11ShaderResourceView>,5>> materialTextures;
+    std::vector<Draw> draws; ComPtr<ID3D11Buffer> emitterVb,emitterIb; UINT emitterIndexCount=0; std::vector<std::array<ComPtr<ID3D11ShaderResourceView>,5>> materialTextures;
     ComPtr<ID3D11ShaderResourceView> computeBaseColorArray;
     std::array<ComPtr<ID3D11ShaderResourceView>,5> fallbackTextures;
-    std::array<float,16> vp{}; float camera[3]{}; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
+    std::array<float,16> vp{}; float camera[3]{}; float orbitCenter[3]{}, orbitRadius=1.75f, orbitAngleDegrees=0.f; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
     diagnostics::RunLogger* logger=nullptr; QString imageOutputPath;
 
     bool makeTexture(const QImage& source, ComPtr<ID3D11ShaderResourceView>& out, bool srgb=false) {
@@ -293,6 +264,14 @@ struct D3D11SceneRenderer::Impl {
             base+=UINT(p.indices.size()/3);
         }
         if(logger)logger->note(QStringLiteral("Buffers géométrie créés pour %1 primitives.").arg(draws.size()));
+        std::vector<GpuVertex> emitterVertices;std::vector<UINT> emitterIndices;
+        constexpr int rings=12,sectors=16;
+        for(int ring=0;ring<=rings;++ring){const float latitude=-.5f*kPi+kPi*float(ring)/rings;const float cy=std::sin(latitude),rad=std::cos(latitude);
+            for(int sector=0;sector<=sectors;++sector){const float longitude=2.f*kPi*float(sector)/sectors;const float px=rad*std::cos(longitude),pz=rad*std::sin(longitude);GpuVertex v{};v.p[0]=px;v.p[1]=cy;v.p[2]=pz;v.n[0]=px;v.n[1]=cy;v.n[2]=pz;v.color[0]=v.color[1]=v.color[2]=v.color[3]=1.f;emitterVertices.push_back(v);}}
+        for(int ring=0;ring<rings;++ring)for(int sector=0;sector<sectors;++sector){const UINT a=UINT(ring*(sectors+1)+sector),b=a+UINT(sectors+1);emitterIndices.insert(emitterIndices.end(),{a,b,a+1,a+1,b,b+1});}
+        emitterIndexCount=UINT(emitterIndices.size());
+        if(!makeBuffer(device.Get(),D3D11_BIND_VERTEX_BUFFER,0,0,emitterVertices.data(),emitterVertices.size(),emitterVb)
+           ||!makeBuffer(device.Get(),D3D11_BIND_INDEX_BUFFER,0,0,emitterIndices.data(),emitterIndices.size(),emitterIb)){error=QStringLiteral("D3D11 : géométrie de la source lumineuse impossible.");return false;}
         return true;
     }
 
@@ -319,7 +298,7 @@ struct D3D11SceneRenderer::Impl {
         if(!compileShader(L"raster_pbr.hlsl","PSMain","ps_5_0",ps,error,logger)||FAILED(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,&rasterPs))){if(error.isEmpty())error=QStringLiteral("D3D11 : création pixel shader raster impossible.");return false;}
         if(!compileShader(L"triangle_lighting.hlsl","CSCollectVisible","cs_5_0",cs,error,logger)||FAILED(device->CreateComputeShader(cs->GetBufferPointer(),cs->GetBufferSize(),nullptr,&collectCs))){if(error.isEmpty())error=QStringLiteral("D3D11 : création compute collect impossible.");return false;}
         if(!compileShader(L"triangle_lighting.hlsl","CSShadeVisibleTriangles","cs_5_0",cs,error,logger)||FAILED(device->CreateComputeShader(cs->GetBufferPointer(),cs->GetBufferSize(),nullptr,&shadeCs))){if(error.isEmpty())error=QStringLiteral("D3D11 : création compute lumière impossible.");return false;}
-        if(!makeConstantBuffer(device.Get(),sizeof(PrepassCamera),preCameraCb)||!makeConstantBuffer(device.Get(),sizeof(RasterCamera),rasterCameraCb)||!makeConstantBuffer(device.Get(),sizeof(MaterialConstants),materialCb)||!makeConstantBuffer(device.Get(),sizeof(LightConstants),lightCb)||!makeConstantBuffer(device.Get(),sizeof(FocusedSpotConstants),focusedSpotCb)){error=QStringLiteral("D3D11 : allocations de constantes impossibles.");return false;}
+        if(!makeConstantBuffer(device.Get(),sizeof(PrepassCamera),preCameraCb)||!makeConstantBuffer(device.Get(),sizeof(RasterCamera),rasterCameraCb)||!makeConstantBuffer(device.Get(),sizeof(MaterialConstants),materialCb)||!makeConstantBuffer(device.Get(),sizeof(LightConstants),lightCb)||!makeConstantBuffer(device.Get(),sizeof(AreaLightConstants),areaLightCb)){error=QStringLiteral("D3D11 : allocations de constantes impossibles.");return false;}
         D3D11_SAMPLER_DESC ss{};ss.Filter=D3D11_FILTER_ANISOTROPIC;ss.MaxAnisotropy=4;ss.AddressU=ss.AddressV=ss.AddressW=D3D11_TEXTURE_ADDRESS_WRAP;ss.MaxLOD=D3D11_FLOAT32_MAX;
         if(FAILED(device->CreateSamplerState(&ss,&sampler))){error=QStringLiteral("D3D11 : sampler impossible.");return false;}
         D3D11_DEPTH_STENCIL_DESC ds{};ds.DepthEnable=TRUE;ds.DepthWriteMask=D3D11_DEPTH_WRITE_MASK_ALL;ds.DepthFunc=D3D11_COMPARISON_LESS_EQUAL;ds.StencilEnable=FALSE;
@@ -351,7 +330,7 @@ bool D3D11SceneRenderer::initialize(HWND hwnd,const scene::Scene& scene,const Sc
     {auto phase=logger.scope(QStringLiteral("swapchain, backbuffer, profondeur, ID triangle et staging PNG"));if(!x.createTargets(hwnd,status))return false;}
     {auto phase=logger.scope(QStringLiteral("HLSL · compilation des vertex/pixel/compute shaders et états D3D"));if(!x.createPipeline(status))return false;}
     {auto phase=logger.scope(QStringLiteral("ressources de scène et buffers GPU"));if(!x.createSceneResources(scene,bvh,status))return false;}
-    x.vp=cameraMatrix(scene.bounds,x.camera);x.ready=true;
+    x.vp=cameraMatrix(scene.bounds,x.camera); x.orbitCenter[0]=(scene.bounds.minimum.x+scene.bounds.maximum.x)*.5f; x.orbitCenter[1]=(scene.bounds.minimum.y+scene.bounds.maximum.y)*.5f; x.orbitCenter[2]=(scene.bounds.minimum.z+scene.bounds.maximum.z)*.5f; x.ready=true;
     ComPtr<IDXGIDevice> xd;ComPtr<IDXGIAdapter> ad;DXGI_ADAPTER_DESC desc{};QString gpu=warp?QStringLiteral("WARP logiciel"):QStringLiteral("GPU matériel");
     if(!warp&&SUCCEEDED(x.device.As(&xd))&&SUCCEEDED(xd->GetAdapter(&ad))&&SUCCEEDED(ad->GetDesc(&desc)))gpu=QString::fromWCharArray(desc.Description).trimmed();
     const unsigned major=unsigned(got)>>12,minor=(unsigned(got)>>8)&0xf;
@@ -360,7 +339,9 @@ bool D3D11SceneRenderer::initialize(HWND hwnd,const scene::Scene& scene,const Sc
     return true;
 }
 
-void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
+void D3D11SceneRenderer::setOrbitAngleDegrees(float degrees){impl_->orbitAngleDegrees=degrees;}
+
+void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh,QImage* capturedFrame){
     Q_UNUSED(bvh);
     auto& x=*impl_;if(!x.ready)return;
     const bool logFrame=x.timingNextFrame;x.timingNextFrame=false;
@@ -380,9 +361,11 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · marquage des triangles visibles")));
     x.context->ClearUnorderedAccessViewUint(x.visibleUav.Get(),zero);
-    // Studio key light: compact apparent source, warm white, upper-left/front.
-    // The reduced angular radius makes the cast shadows more directional.
-    LightConstants lc{};lc.width=kWidth;lc.height=kHeight;lc.triangleCount=x.triCount;lc.samples=x.samples;lc.camera[0]=x.camera[0];lc.camera[1]=x.camera[1];lc.camera[2]=x.camera[2];lc.epsilon=std::max(1.e-4f,std::sqrt(std::pow(scene.bounds.maximum.x-scene.bounds.minimum.x,2.f)+std::pow(scene.bounds.maximum.y-scene.bounds.minimum.y,2.f)+std::pow(scene.bounds.maximum.z-scene.bounds.minimum.z,2.f))*1.e-5f);lc.light[0]=-.55f;lc.light[1]=.74f;lc.light[2]=.38f;normalize(lc.light[0],lc.light[1],lc.light[2]);lc.intensity=2.1f;lc.lightColor[0]=1.f;lc.lightColor[1]=.91f;lc.lightColor[2]=.78f;lc.angularRadius=.035f;updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
+    const float orbitRadians=x.orbitAngleDegrees*kPi/180.f;
+    // Tilted orbit; the luminous sphere is 0.18 m across and the orbit radius is 1.75 m.
+    const float ax=.65f, ay=.0f, az=-.76f, bx=.31f, by=.90f, bz=.30f;
+    LightConstants lc{};lc.width=kWidth;lc.height=kHeight;lc.triangleCount=x.triCount;lc.samples=x.samples;lc.camera[0]=x.camera[0];lc.camera[1]=x.camera[1];lc.camera[2]=x.camera[2];lc.epsilon=std::max(1.e-4f,std::sqrt(std::pow(scene.bounds.maximum.x-scene.bounds.minimum.x,2.f)+std::pow(scene.bounds.maximum.y-scene.bounds.minimum.y,2.f)+std::pow(scene.bounds.maximum.z-scene.bounds.minimum.z,2.f))*1.e-5f);
+    lc.light[0]=x.orbitCenter[0]+x.orbitRadius*(ax*std::cos(orbitRadians)+bx*std::sin(orbitRadians));lc.light[1]=x.orbitCenter[1]+x.orbitRadius*(ay*std::cos(orbitRadians)+by*std::sin(orbitRadians));lc.light[2]=x.orbitCenter[2]+x.orbitRadius*(az*std::cos(orbitRadians)+bz*std::sin(orbitRadians));lc.intensity=28.0f;lc.lightColor[0]=1.f;lc.lightColor[1]=.91f;lc.lightColor[2]=.78f;lc.angularRadius=.12f;updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
     ID3D11ShaderResourceView* ids=x.idSrv.Get();x.context->CSSetShaderResources(0,1,&ids);ID3D11UnorderedAccessView* vis=x.visibleUav.Get();x.context->CSSetUnorderedAccessViews(0,1,&vis,nullptr);x.context->CSSetShader(x.collectCs.Get(),nullptr,0);x.context->Dispatch((kWidth+7)/8,(kHeight+7)/8,1);
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · rayons d'ombre/réflexion et parcours BVH")));
@@ -396,15 +379,20 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
     ID3D11SamplerState* nullSampler=nullptr;x.context->CSSetShader(nullptr,nullptr,0);std::array<ID3D11ShaderResourceView*,6> nullComputeSrvs{};x.context->CSSetShaderResources(1,UINT(nullComputeSrvs.size()),nullComputeSrvs.data());x.context->CSSetSamplers(0,1,&nullSampler);x.context->CSSetUnorderedAccessViews(0,2,std::array<ID3D11UnorderedAccessView*,2>{}.data(),nullptr);
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("raster Direct3D · textures, normales, alpha et affichage")));
-    ID3D11RenderTargetView* color=x.backRtv.Get();x.context->OMSetRenderTargets(1,&color,x.depthDsv.Get());x.context->ClearRenderTargetView(x.backRtv.Get(),clear);x.context->OMSetDepthStencilState(x.depthRead.Get(),0);x.context->VSSetShader(x.rasterVs.Get(),nullptr,0);x.context->PSSetShader(x.rasterPs.Get(),nullptr,0);ID3D11ShaderResourceView* lightSrv=x.radianceSrv.Get();x.context->PSSetShaderResources(5,1,&lightSrv);ID3D11Buffer* focusedSpot=x.focusedSpotCb.Get();x.context->PSSetConstantBuffers(2,1,&focusedSpot);ID3D11SamplerState* samp=x.sampler.Get();x.context->PSSetSamplers(0,1,&samp);
+    ID3D11RenderTargetView* color=x.backRtv.Get();x.context->OMSetRenderTargets(1,&color,x.depthDsv.Get());x.context->ClearRenderTargetView(x.backRtv.Get(),clear);x.context->OMSetDepthStencilState(x.depthRead.Get(),0);x.context->VSSetShader(x.rasterVs.Get(),nullptr,0);x.context->PSSetShader(x.rasterPs.Get(),nullptr,0);ID3D11ShaderResourceView* lightSrv=x.radianceSrv.Get();x.context->PSSetShaderResources(5,1,&lightSrv); AreaLightConstants alc{}; alc.position[0]=lc.light[0];alc.position[1]=lc.light[1];alc.position[2]=lc.light[2];alc.intensity=lc.intensity;alc.color[0]=lc.lightColor[0];alc.color[1]=lc.lightColor[1];alc.color[2]=lc.lightColor[2];alc.radius=lc.angularRadius;updateBuffer(x.context.Get(),x.areaLightCb.Get(),alc);ID3D11Buffer* areaLight=x.areaLightCb.Get();x.context->PSSetConstantBuffers(2,1,&areaLight);ID3D11SamplerState* samp=x.sampler.Get();x.context->PSSetSamplers(0,1,&samp);
     for(size_t i=0;i<scene.primitives.size()&&i<x.draws.size();++i){const auto& p=scene.primitives[int(i)];const auto& d=x.draws[i];if(!d.vb||!d.ib)continue;const int mi=d.material;const scene::Material* m=mi>=0?&scene.materials[mi]:nullptr;x.context->RSSetState(m&&m->doubleSided?x.rasterDoubleSided.Get():x.rasterState.Get());RasterCamera rc{};std::copy(x.vp.begin(),x.vp.end(),rc.vp);std::copy(p.worldTransform.begin(),p.worldTransform.end(),rc.world);const auto nm=normalMatrix(p.worldTransform);std::copy(nm.begin(),nm.end(),rc.normalWorld);rc.camera[0]=x.camera[0];rc.camera[1]=x.camera[1];rc.camera[2]=x.camera[2];rc.camera[3]=1;updateBuffer(x.context.Get(),x.rasterCameraCb.Get(),rc);ID3D11Buffer* cb=x.rasterCameraCb.Get();x.context->VSSetConstantBuffers(0,1,&cb);x.context->PSSetConstantBuffers(0,1,&cb);
         MaterialConstants mc{};mc.baseColor[0]=m?m->baseColor.x:1;mc.baseColor[1]=m?m->baseColor.y:1;mc.baseColor[2]=m?m->baseColor.z:1;mc.baseColor[3]=m?m->baseColor.w:1;mc.surface[0]=m?m->metallic:0;mc.surface[1]=m?m->roughness:.7f;mc.surface[2]=m?m->alphaCutoff:.5f;mc.surface[3]=m?(m->alphaMode==QStringLiteral("MASK")?1.f:m->alphaMode==QStringLiteral("BLEND")?2.f:0.f):0.f;mc.emissive[0]=m?m->emissive.x:0;mc.emissive[1]=m?m->emissive.y:0;mc.emissive[2]=m?m->emissive.z:0;mc.details[0]=m?m->normalScale:1.f;mc.details[1]=m?m->occlusionStrength:1.f;mc.triangleBase=d.triangleBase;updateBuffer(x.context.Get(),x.materialCb.Get(),mc);cb=x.materialCb.Get();x.context->PSSetConstantBuffers(1,1,&cb);
         ID3D11ShaderResourceView* maps[5];for(int slot=0;slot<5;++slot)maps[slot]=m&&mi<int(x.materialTextures.size())?x.materialTextures[size_t(mi)][size_t(slot)].Get():x.fallbackTextures[size_t(slot)].Get();x.context->PSSetShaderResources(0,5,maps);
         UINT stride=sizeof(GpuVertex),offset=0;ID3D11Buffer* vb=d.vb.Get();x.context->IASetVertexBuffers(0,1,&vb,&stride,&offset);x.context->IASetIndexBuffer(d.ib.Get(),DXGI_FORMAT_R32_UINT,0);if(mc.surface[3]==2){const float blend[4]={0,0,0,0};x.context->OMSetBlendState(x.alphaBlend.Get(),blend,0xffffffff);}else x.context->OMSetBlendState(nullptr,nullptr,0xffffffff);x.context->DrawIndexed(d.indexCount,0,0);
     }
+    if(x.emitterVb&&x.emitterIb){
+        RasterCamera rc{};std::copy(x.vp.begin(),x.vp.end(),rc.vp);auto world=identity();world[0]=world[5]=world[10]=.12f;world[12]=lc.light[0];world[13]=lc.light[1];world[14]=lc.light[2];std::copy(world.begin(),world.end(),rc.world);auto nm=identity();std::copy(nm.begin(),nm.end(),rc.normalWorld);rc.camera[0]=x.camera[0];rc.camera[1]=x.camera[1];rc.camera[2]=x.camera[2];rc.camera[3]=1;updateBuffer(x.context.Get(),x.rasterCameraCb.Get(),rc);ID3D11Buffer* cb=x.rasterCameraCb.Get();x.context->VSSetConstantBuffers(0,1,&cb);x.context->PSSetConstantBuffers(0,1,&cb);
+        MaterialConstants mc{};mc.baseColor[0]=mc.baseColor[1]=mc.baseColor[2]=mc.baseColor[3]=1.f;mc.surface[1]=.3f;mc.details[2]=1.f;updateBuffer(x.context.Get(),x.materialCb.Get(),mc);cb=x.materialCb.Get();x.context->PSSetConstantBuffers(1,1,&cb);
+        ID3D11ShaderResourceView* maps[5];for(int i=0;i<5;++i)maps[i]=x.fallbackTextures[i].Get();x.context->PSSetShaderResources(0,5,maps);x.context->RSSetState(x.rasterDoubleSided.Get());UINT stride=sizeof(GpuVertex),offset=0;ID3D11Buffer* vb=x.emitterVb.Get();x.context->IASetVertexBuffers(0,1,&vb,&stride,&offset);x.context->IASetIndexBuffer(x.emitterIb.Get(),DXGI_FORMAT_R32_UINT,0);x.context->DrawIndexed(x.emitterIndexCount,0,0);
+    }
     passTiming.reset();
     x.context->OMSetBlendState(nullptr,nullptr,0xffffffff);x.context->OMSetRenderTargets(0,&none,nullptr);x.context->PSSetShaderResources(0,6,std::array<ID3D11ShaderResourceView*,6>{}.data());
-    if(x.imageExportPending){
+    if(x.imageExportPending || capturedFrame){
         std::optional<diagnostics::RunLogger::Scope> imageTiming;
         if(x.logger)imageTiming.emplace(x.logger->scope(QStringLiteral("export · capture PNG du rendu final")));
         x.context->CopyResource(x.imageStaging.Get(),x.backBuffer.Get());
@@ -413,14 +401,16 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh){
             QImage image(int(kWidth),int(kHeight),QImage::Format_ARGB32);
             for(UINT y=0;y<kHeight;++y)std::memcpy(image.scanLine(int(y)),static_cast<const char*>(map.pData)+size_t(y)*map.RowPitch,size_t(kWidth)*4);
             x.context->Unmap(x.imageStaging.Get(),0);
-            const QFileInfo baseInfo(x.imageOutputPath);
-            const QString rayLabel=x.samples==1?QStringLiteral("rayon"):QStringLiteral("rayons");
-            const QString samplePath=QDir(baseInfo.path()).filePath(QStringLiteral("%1_%2_%3.%4")
-                .arg(baseInfo.completeBaseName()).arg(x.samples).arg(rayLabel,baseInfo.suffix()));
-            if(image.save(samplePath, "PNG")){if(x.logger)x.logger->note(QStringLiteral("Image exportée (%1 %2) : ").arg(x.samples).arg(rayLabel)+samplePath);}
-            else if(x.logger)x.logger->note(QStringLiteral("ERREUR : l'image PNG n'a pas pu être écrite : ")+samplePath);
+            if(capturedFrame)*capturedFrame=image.copy();
+            if(x.imageExportPending){const QFileInfo baseInfo(x.imageOutputPath);
+                const QString rayLabel=x.samples==1?QStringLiteral("rayon"):QStringLiteral("rayons");
+                const QString samplePath=QDir(baseInfo.path()).filePath(QStringLiteral("%1_%2_%3.%4")
+                    .arg(baseInfo.completeBaseName()).arg(x.samples).arg(rayLabel,baseInfo.suffix()));
+                if(image.save(samplePath, "PNG")){if(x.logger)x.logger->note(QStringLiteral("Image exportée (%1 %2) : ").arg(x.samples).arg(rayLabel)+samplePath);}
+                else if(x.logger)x.logger->note(QStringLiteral("ERREUR : l'image PNG n'a pas pu être écrite : ")+samplePath);
+            }
         }else if(x.logger)x.logger->note(QStringLiteral("ERREUR : lecture staging impossible pour l'export PNG."));
-        x.imageExportPending=false;
+        if(x.imageExportPending)x.imageExportPending=false;
     }
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("Present · VSync")));
     x.swap->Present(1,0);

@@ -38,7 +38,7 @@ cbuffer LightConstants : register(b0)
     uint SamplesPerTriangle; // clamp to [1,4]
     float3 CameraPosition;
     float RayEpsilon;
-    float3 KeyLightDirection;
+    float3 LightPosition;
     float KeyLightIntensity;
     float3 KeyLightColor;
     float LightAngularRadius;
@@ -166,18 +166,25 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
     {
         float3 p = SamplePoint(tri, sampleIndex, samples);
         float3 n = normalize(tri.n0 + tri.n1 + tri.n2);
-        float3 lightRight = normalize(cross(KeyLightDirection, float3(0.0, 1.0, 0.0)));
-        float3 lightUp = normalize(cross(KeyLightDirection, lightRight));
+        float3 toCenter = LightPosition - p;
+        float centerDistance = max(length(toCenter), 1.e-4);
+        float3 lightDirection = toCenter / centerDistance;
+        float3 lightRight = normalize(cross(lightDirection, float3(0.0, 1.0, 0.0)));
+        float3 lightUp = normalize(cross(lightDirection, lightRight));
         float2 lightSample = SampleAreaLight(sampleIndex, samples);
-        float3 toLight = normalize(KeyLightDirection + LightAngularRadius *
-            (lightRight * lightSample.x + lightUp * lightSample.y));
+        float3 sampledPosition = LightPosition + LightAngularRadius *
+            (lightRight * lightSample.x + lightUp * lightSample.y);
+        float3 toLight = sampledPosition - p;
+        float lightDistance = length(toLight);
+        toLight /= max(lightDistance, 1.e-4);
         uint shadowHit; float shadowT; float3 shadowBarycentrics;
-        bool occluded = TraceScene(p + n*RayEpsilon, toLight, 10000.0, triangleId,
+        bool occluded = TraceScene(p + n*RayEpsilon, toLight, max(RayEpsilon,lightDistance-RayEpsilon), triangleId,
                                    shadowHit, shadowT, shadowBarycentrics);
         float visible = occluded ? 0.0 : 1.0;
-        // Store ray visibility/intensity only; raster applies its per-pixel
-        // (normal-map-aware) Lambert term to avoid multiplying N.L twice.
-        accumulatedDiffuse += visible * KeyLightIntensity * KeyLightColor;
+        // Raster applies its per-pixel Lambert term; compute contributes shadowed
+        // inverse-square point-light radiance only.
+        accumulatedDiffuse += visible * KeyLightIntensity * KeyLightColor
+                            / max(lightDistance * lightDistance, 0.25);
 
         float3 viewDirection = normalize(CameraPosition - p);
         float3 reflectionDirection = reflect(-viewDirection,n);
