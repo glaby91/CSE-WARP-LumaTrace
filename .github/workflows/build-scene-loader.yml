@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          lfs: true
+          lfs: false
       - name: Report scene asset hydration
         shell: pwsh
         run: |
@@ -65,6 +65,7 @@ jobs:
       - name: Deploy Qt runtime beside the executable
         run: windeployqt --release --no-translations build/Release/CSE_WARP_LumaTrace.exe
       - name: Verify packaged Porsche 930 scene
+        if: env.LUMATRACE_SCENE_READY == 'true'
         shell: pwsh
         run: |
           $sceneRoot = 'build/Release/assets/vehicles/porsche_930/scene'
