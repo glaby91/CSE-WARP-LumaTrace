@@ -202,7 +202,20 @@ struct D3D11SceneRenderer::Impl {
 
         if(logger)uploadTiming.emplace(logger->scope(QStringLiteral("GPU upload · matériaux et textures")));
         std::vector<GpuMaterial> gm; gm.reserve(size_t(scene.materials.size()));
-        for(const auto& m:scene.materials) gm.push_back({{m.baseColor.x,m.baseColor.y,m.baseColor.z,m.baseColor.w},m.metallic,m.roughness,{0,0}});
+        for(const auto& m:scene.materials) {
+            // Keep triangle-ray reflections in sync with the albedo used by
+            // the raster pass for the custom Porsche paint treatment.
+            const bool porschePaint = m.name.compare(QStringLiteral("paint"), Qt::CaseInsensitive) == 0;
+            gm.push_back({
+                {porschePaint ? .98f : m.baseColor.x,
+                 porschePaint ? .012f : m.baseColor.y,
+                 porschePaint ? .035f : m.baseColor.z,
+                 m.baseColor.w},
+                porschePaint ? .74f : m.metallic,
+                porschePaint ? .17f : m.roughness,
+                {0,0}
+            });
+        }
         if(gm.empty()) gm.push_back({{.7f,.7f,.7f,1.f},0.f,.7f,{0,0}});
         if(!makeBuffer(device.Get(),D3D11_BIND_SHADER_RESOURCE,D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,sizeof(GpuMaterial),gm.data(),gm.size(),materialBuffer)
         ||!makeSrv(materialBuffer.Get(),UINT(gm.size()),materialSrv)){error=QStringLiteral("D3D11 : upload des matériaux impossible.");return false;}
