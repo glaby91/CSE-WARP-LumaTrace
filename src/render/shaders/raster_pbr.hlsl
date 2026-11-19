@@ -102,7 +102,7 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     uint triangleId = TriangleBase + primitiveId;
     float4 triLight = TriangleLighting[triangleId];
     float3 viewDirection = normalize(CameraPosition.xyz - input.worldPosition);
-    float3 keyDirection = normalize(float3(-0.45, 0.82, 0.34));
+    float3 keyDirection = normalize(float3(0.96, 0.24, 0.17));
     float ndotl = saturate(dot(n, keyDirection));
     float3 diffuse = base.rgb * (0.18 + ndotl * triLight.rgb) * (1.0 - metallic) * ao;
     float3 halfVector = normalize(keyDirection + viewDirection);
