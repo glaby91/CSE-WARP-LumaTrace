@@ -28,7 +28,7 @@ constexpr UINT kWidth = 960, kHeight = 540;
 constexpr float kPi = 3.14159265358979323846f;
 
 struct GpuVertex { float p[3], n[3], uv[2], tangent[4], color[4]; };
-static_assert(sizeof(GpuVertex) == 60);
+static_assert(sizeof(GpuVertex) == 64);
 struct alignas(16) RasterCamera { float vp[16]; float world[16]; float normalWorld[16]; float camera[4]; };
 struct alignas(16) PrepassCamera { float vp[16]; float world[16]; std::uint32_t triangleBase, alphaMode; float alphaCutoff, baseAlpha; };
 struct alignas(16) MaterialConstants { float baseColor[4], surface[4], emissive[4], details[4]; std::uint32_t triangleBase, padding[3]; };
