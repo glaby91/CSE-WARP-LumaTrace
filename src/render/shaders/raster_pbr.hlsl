@@ -95,8 +95,8 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     float ndotl = saturate(dot(n, lightDirection));
     float3 fillDirection = normalize(float3(0.65, 0.35, -0.67));
     float fillNdotL = saturate(dot(n, fillDirection));
-    float3 fill = fillNdotL * float3(0.025, 0.075, 0.09);
-    float3 diffuse = base.rgb * (0.18 + ndotl * triLight.rgb + fill) * (1.0 - metallic) * ao;
+    float3 fill = fillNdotL * float3(0.04, 0.055, 0.065);
+    float3 diffuse = base.rgb * (0.32 + ndotl * triLight.rgb + fill) * (1.0 - metallic) * ao;
     float3 halfVector = normalize(lightDirection + viewDirection);
     float specularPower = lerp(96.0, 4.0, roughness);
     float3 specular = lerp(float3(0.04, 0.04, 0.04), base.rgb, metallic)

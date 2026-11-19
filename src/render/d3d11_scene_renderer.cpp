@@ -130,7 +130,7 @@ struct D3D11SceneRenderer::Impl {
     std::vector<Draw> draws; ComPtr<ID3D11Buffer> emitterVb,emitterIb; UINT emitterIndexCount=0; std::vector<std::array<ComPtr<ID3D11ShaderResourceView>,5>> materialTextures;
     ComPtr<ID3D11ShaderResourceView> computeBaseColorArray;
     std::array<ComPtr<ID3D11ShaderResourceView>,5> fallbackTextures;
-    std::array<float,16> vp{}; float camera[3]{}; float orbitCenter[3]{}, orbitRadius=1.75f, orbitAngleDegrees=0.f; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
+    std::array<float,16> vp{}; float camera[3]{}; float orbitCenter[3]{}, orbitRadius=1.65f, orbitAngleDegrees=0.f; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
     diagnostics::RunLogger* logger=nullptr; QString imageOutputPath;
 
     bool makeTexture(const QImage& source, ComPtr<ID3D11ShaderResourceView>& out, bool srgb=false) {
@@ -362,10 +362,10 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh,QI
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · marquage des triangles visibles")));
     x.context->ClearUnorderedAccessViewUint(x.visibleUav.Get(),zero);
     const float orbitRadians=x.orbitAngleDegrees*kPi/180.f;
-    // Tilted orbit; the luminous sphere is 0.18 m across and the orbit radius is 1.75 m.
-    const float ax=.65f, ay=.0f, az=-.76f, bx=.31f, by=.90f, bz=.30f;
+    // Tilted orbit; the luminous sphere is 0.18 m across and the orbit radius is 1.65 m.
+    const float ax=.496f, ay=.869f, az=.0f, bx=.390f, by=-.222f, bz=.898f;
     LightConstants lc{};lc.width=kWidth;lc.height=kHeight;lc.triangleCount=x.triCount;lc.samples=x.samples;lc.camera[0]=x.camera[0];lc.camera[1]=x.camera[1];lc.camera[2]=x.camera[2];lc.epsilon=std::max(1.e-4f,std::sqrt(std::pow(scene.bounds.maximum.x-scene.bounds.minimum.x,2.f)+std::pow(scene.bounds.maximum.y-scene.bounds.minimum.y,2.f)+std::pow(scene.bounds.maximum.z-scene.bounds.minimum.z,2.f))*1.e-5f);
-    lc.light[0]=x.orbitCenter[0]+x.orbitRadius*(ax*std::cos(orbitRadians)+bx*std::sin(orbitRadians));lc.light[1]=x.orbitCenter[1]+x.orbitRadius*(ay*std::cos(orbitRadians)+by*std::sin(orbitRadians));lc.light[2]=x.orbitCenter[2]+x.orbitRadius*(az*std::cos(orbitRadians)+bz*std::sin(orbitRadians));lc.intensity=28.0f;lc.lightColor[0]=1.f;lc.lightColor[1]=.91f;lc.lightColor[2]=.78f;lc.angularRadius=.12f;updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
+    lc.light[0]=x.orbitCenter[0]+x.orbitRadius*(ax*std::cos(orbitRadians)+bx*std::sin(orbitRadians));lc.light[1]=x.orbitCenter[1]+x.orbitRadius*(ay*std::cos(orbitRadians)+by*std::sin(orbitRadians));lc.light[2]=x.orbitCenter[2]+x.orbitRadius*(az*std::cos(orbitRadians)+bz*std::sin(orbitRadians));lc.intensity=44.0f;lc.lightColor[0]=1.f;lc.lightColor[1]=.91f;lc.lightColor[2]=.78f;lc.angularRadius=.26f;updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
     ID3D11ShaderResourceView* ids=x.idSrv.Get();x.context->CSSetShaderResources(0,1,&ids);ID3D11UnorderedAccessView* vis=x.visibleUav.Get();x.context->CSSetUnorderedAccessViews(0,1,&vis,nullptr);x.context->CSSetShader(x.collectCs.Get(),nullptr,0);x.context->Dispatch((kWidth+7)/8,(kHeight+7)/8,1);
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · rayons d'ombre/réflexion et parcours BVH")));
@@ -386,7 +386,7 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh,QI
         UINT stride=sizeof(GpuVertex),offset=0;ID3D11Buffer* vb=d.vb.Get();x.context->IASetVertexBuffers(0,1,&vb,&stride,&offset);x.context->IASetIndexBuffer(d.ib.Get(),DXGI_FORMAT_R32_UINT,0);if(mc.surface[3]==2){const float blend[4]={0,0,0,0};x.context->OMSetBlendState(x.alphaBlend.Get(),blend,0xffffffff);}else x.context->OMSetBlendState(nullptr,nullptr,0xffffffff);x.context->DrawIndexed(d.indexCount,0,0);
     }
     if(x.emitterVb&&x.emitterIb){
-        RasterCamera rc{};std::copy(x.vp.begin(),x.vp.end(),rc.vp);auto world=identity();world[0]=world[5]=world[10]=.12f;world[12]=lc.light[0];world[13]=lc.light[1];world[14]=lc.light[2];std::copy(world.begin(),world.end(),rc.world);auto nm=identity();std::copy(nm.begin(),nm.end(),rc.normalWorld);rc.camera[0]=x.camera[0];rc.camera[1]=x.camera[1];rc.camera[2]=x.camera[2];rc.camera[3]=1;updateBuffer(x.context.Get(),x.rasterCameraCb.Get(),rc);ID3D11Buffer* cb=x.rasterCameraCb.Get();x.context->VSSetConstantBuffers(0,1,&cb);x.context->PSSetConstantBuffers(0,1,&cb);
+        RasterCamera rc{};std::copy(x.vp.begin(),x.vp.end(),rc.vp);auto world=identity();world[0]=world[5]=world[10]=.24f;world[12]=lc.light[0];world[13]=lc.light[1];world[14]=lc.light[2];std::copy(world.begin(),world.end(),rc.world);auto nm=identity();std::copy(nm.begin(),nm.end(),rc.normalWorld);rc.camera[0]=x.camera[0];rc.camera[1]=x.camera[1];rc.camera[2]=x.camera[2];rc.camera[3]=1;updateBuffer(x.context.Get(),x.rasterCameraCb.Get(),rc);ID3D11Buffer* cb=x.rasterCameraCb.Get();x.context->VSSetConstantBuffers(0,1,&cb);x.context->PSSetConstantBuffers(0,1,&cb);
         MaterialConstants mc{};mc.baseColor[0]=mc.baseColor[1]=mc.baseColor[2]=mc.baseColor[3]=1.f;mc.surface[1]=.3f;mc.details[2]=1.f;updateBuffer(x.context.Get(),x.materialCb.Get(),mc);cb=x.materialCb.Get();x.context->PSSetConstantBuffers(1,1,&cb);
         ID3D11ShaderResourceView* maps[5];for(int i=0;i<5;++i)maps[i]=x.fallbackTextures[i].Get();x.context->PSSetShaderResources(0,5,maps);x.context->RSSetState(x.rasterDoubleSided.Get());UINT stride=sizeof(GpuVertex),offset=0;ID3D11Buffer* vb=x.emitterVb.Get();x.context->IASetVertexBuffers(0,1,&vb,&stride,&offset);x.context->IASetIndexBuffer(x.emitterIb.Get(),DXGI_FORMAT_R32_UINT,0);x.context->DrawIndexed(x.emitterIndexCount,0,0);
     }
