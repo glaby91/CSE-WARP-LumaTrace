@@ -34,10 +34,10 @@ cbuffer LightConstants : register(b0)
     uint SamplesPerTriangle; // clamp to [1,4]
     float3 CameraPosition;
     float RayEpsilon;
-    float3 KeyLightDirection;
+    float3 LightPosition;
     float KeyLightIntensity;
     float3 KeyLightColor;
-    float LightAngularRadius;
+    float LightRadius;
 };
 
 [numthreads(8,8,1)]
@@ -150,13 +150,18 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
     {
         float3 p = SamplePoint(tri, sampleIndex, samples);
         float3 n = normalize(tri.n0 + tri.n1 + tri.n2);
-        float3 lightRight = normalize(cross(KeyLightDirection, float3(0.0, 1.0, 0.0)));
-        float3 lightUp = normalize(cross(KeyLightDirection, lightRight));
+        float3 sceneCenter = (Bvh[0].minimum + Bvh[0].maximum) * 0.5;
+        float3 lightForward = normalize(sceneCenter - LightPosition);
+        float3 lightRight = normalize(cross(lightForward, float3(0.0, 1.0, 0.0)));
+        float3 lightUp = normalize(cross(lightRight, lightForward));
         float2 lightSample = SampleAreaLight(sampleIndex, samples);
-        float3 toLight = normalize(KeyLightDirection + LightAngularRadius *
-            (lightRight * lightSample.x + lightUp * lightSample.y));
+        float3 lightSamplePosition = LightPosition + LightRadius *
+            (lightRight * lightSample.x + lightUp * lightSample.y);
+        float3 lightVector = lightSamplePosition - p;
+        float lightDistance = length(lightVector);
+        float3 toLight = lightVector / max(lightDistance, RayEpsilon);
         uint shadowHit; float shadowT;
-        bool occluded = TraceScene(p + n*RayEpsilon, toLight, 10000.0, triangleId, shadowHit, shadowT);
+        bool occluded = TraceScene(p + n*RayEpsilon, toLight, max(lightDistance-RayEpsilon,RayEpsilon), triangleId, shadowHit, shadowT);
         float visible = occluded ? 0.0 : 1.0;
         // Store ray visibility/intensity only; raster applies its per-pixel
         // (normal-map-aware) Lambert term to avoid multiplying N.L twice.
