@@ -1,18 +1,20 @@
-name: Build LumaTrace scene loader
+name: Build LumaTrace renderer (Windows)
 
 on:
   push:
     branches: [DX11LightTracing]
     paths:
       - 'CMakeLists.txt'
-      - 'src/scene/**'
-      - '.github/workflows/build-scene-loader.yml'
+      - 'src/**'
+      - 'assets/vehicles/porsche_930/scene/**'
+      - '.github/workflows/**'
   pull_request:
     branches: [DX11LightTracing]
     paths:
       - 'CMakeLists.txt'
-      - 'src/scene/**'
-      - '.github/workflows/build-scene-loader.yml'
+      - 'src/**'
+      - 'assets/vehicles/porsche_930/scene/**'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 jobs:
@@ -29,5 +31,13 @@ jobs:
           cache: true
       - name: Configure
         run: cmake -S . -B build -A x64 -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
-      - name: Compile scene loader
-        run: cmake --build build --config Release --parallel 2
+      - name: Build full LumaTrace application
+        run: cmake --build build --config Release --target CSE_WARP_LumaTrace --parallel 2
+      - name: Deploy Qt runtime beside the executable
+        run: windeployqt --release --no-translations build/Release/CSE_WARP_LumaTrace.exe
+      - name: Upload runnable Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: CSE-WARP-LumaTrace-windows-x64
+          path: build/Release/
+          if-no-files-found: error

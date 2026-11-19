@@ -1,0 +1,165 @@
+struct Triangle
+{
+    float3 p0; uint material;
+    float3 p1; uint triangleId;
+    float3 p2; uint pad0;
+    float3 n0; uint pad1;
+    float3 n1; uint pad2;
+    float3 n2; uint pad3;
+    float2 uv0; float2 uv1;
+    float2 uv2; float2 pad4;
+};
+struct BvhNode
+{
+    float3 minimum; uint leftChild;
+    float3 maximum; uint rightChild;
+    uint firstTriangle; uint triangleCount; uint pad0; uint pad1;
+};
+struct MaterialData { float4 baseColor; float metallic; float roughness; float2 pad; };
+
+Texture2D<uint> VisibleTriangleIds : register(t0);
+StructuredBuffer<Triangle> Triangles : register(t1);
+StructuredBuffer<uint> TriangleOrder : register(t2);
+StructuredBuffer<BvhNode> Bvh : register(t3);
+StructuredBuffer<MaterialData> Materials : register(t4);
+StructuredBuffer<uint> VisibleFlags : register(t5);
+RWStructuredBuffer<uint> OutVisibleFlags : register(u0);
+RWStructuredBuffer<float4> TriangleRadiance : register(u1);
+
+cbuffer LightConstants : register(b0)
+{
+    uint ImageWidth;
+    uint ImageHeight;
+    uint TriangleCount;
+    uint SamplesPerTriangle; // clamp to [1,4]
+    float3 CameraPosition;
+    float RayEpsilon;
+    float3 KeyLightDirection;
+    float KeyLightIntensity;
+};
+
+[numthreads(8,8,1)]
+void CSCollectVisible(uint3 dispatchId : SV_DispatchThreadID)
+{
+    if (dispatchId.x >= ImageWidth || dispatchId.y >= ImageHeight) return;
+    uint id = VisibleTriangleIds.Load(int3(dispatchId.xy, 0));
+    if (id >= TriangleCount) return;
+    InterlockedOr(OutVisibleFlags[id], 1);
+}
+
+bool HitBounds(BvhNode node, float3 origin, float3 inverseDirection, float maxDistance)
+{
+    float3 a = (node.minimum - origin) * inverseDirection;
+    float3 b = (node.maximum - origin) * inverseDirection;
+    float3 lo = min(a, b), hi = max(a, b);
+    float nearT = max(max(lo.x, lo.y), max(lo.z, 0.0));
+    float farT = min(min(hi.x, hi.y), min(hi.z, maxDistance));
+    return farT >= nearT;
+}
+
+bool HitTriangle(Triangle tri, float3 origin, float3 direction, float maxDistance, out float hitT)
+{
+    float3 e1 = tri.p1 - tri.p0, e2 = tri.p2 - tri.p0;
+    float3 p = cross(direction, e2);
+    float determinant = dot(e1, p);
+    if (abs(determinant) < 1.e-8) { hitT = maxDistance; return false; }
+    float invDet = 1.0 / determinant;
+    float3 tvec = origin - tri.p0;
+    float u = dot(tvec, p) * invDet;
+    if (u < 0.0 || u > 1.0) { hitT = maxDistance; return false; }
+    float3 q = cross(tvec, e1);
+    float v = dot(direction, q) * invDet;
+    if (v < 0.0 || u + v > 1.0) { hitT = maxDistance; return false; }
+    hitT = dot(e2, q) * invDet;
+    return hitT > RayEpsilon && hitT < maxDistance;
+}
+
+bool TraceScene(float3 origin, float3 direction, float maxDistance, uint sourceTriangle,
+                out uint hitTriangle, out float hitDistance)
+{
+    uint stack[64]; uint top = 0; stack[top++] = 0;
+    float3 safeDirection = float3(
+        abs(direction.x) < 1.e-8 ? (direction.x < 0.0 ? -1.e-8 : 1.e-8) : direction.x,
+        abs(direction.y) < 1.e-8 ? (direction.y < 0.0 ? -1.e-8 : 1.e-8) : direction.y,
+        abs(direction.z) < 1.e-8 ? (direction.z < 0.0 ? -1.e-8 : 1.e-8) : direction.z);
+    float3 invDir = rcp(safeDirection);
+    hitTriangle = 0xffffffff; hitDistance = maxDistance;
+    [loop] while (top > 0)
+    {
+        uint nodeIndex = stack[--top];
+        BvhNode node = Bvh[nodeIndex];
+        if (!HitBounds(node, origin, invDir, hitDistance)) continue;
+        if (node.triangleCount > 0)
+        {
+            [loop] for (uint j = 0; j < node.triangleCount; ++j)
+            {
+                uint id = TriangleOrder[node.firstTriangle + j];
+                if (id == sourceTriangle) continue;
+                float t;
+                if (HitTriangle(Triangles[id], origin, direction, hitDistance, t))
+                { hitDistance = t; hitTriangle = id; }
+            }
+        }
+        else if (top < 62)
+        {
+            stack[top++] = node.rightChild;
+            stack[top++] = node.leftChild;
+        }
+    }
+    return hitTriangle != 0xffffffff;
+}
+
+float Hash1(uint v)
+{
+    v ^= v >> 16; v *= 0x7feb352d; v ^= v >> 15; v *= 0x846ca68b; v ^= v >> 16;
+    return (v & 0x00ffffff) / 16777216.0;
+}
+
+float3 SamplePoint(Triangle t, uint sampleIndex, uint sampleCount)
+{
+    if (sampleCount <= 1) return (t.p0 + t.p1 + t.p2) / 3.0;
+    float a = sampleIndex == 0 ? 0.64 : sampleIndex == 1 ? 0.18 : sampleIndex == 2 ? 0.18 : 0.34;
+    float b = sampleIndex == 0 ? 0.18 : sampleIndex == 1 ? 0.64 : sampleIndex == 2 ? 0.18 : 0.33;
+    float c = 1.0 - a - b;
+    return t.p0*a + t.p1*b + t.p2*c;
+}
+
+[numthreads(64,1,1)]
+void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
+{
+    uint triangleId = dispatchId.x;
+    if (triangleId >= TriangleCount || VisibleFlags[triangleId] == 0) return;
+    Triangle tri = Triangles[triangleId];
+    uint samples = clamp(SamplesPerTriangle, 1, 4);
+    float3 accumulatedDiffuse = 0.0;
+    float3 accumulatedReflection = 0.0;
+    [loop] for (uint sampleIndex = 0; sampleIndex < samples; ++sampleIndex)
+    {
+        float3 p = SamplePoint(tri, sampleIndex, samples);
+        float3 n = normalize(tri.n0 + tri.n1 + tri.n2);
+        float3 toLight = normalize(KeyLightDirection);
+        uint shadowHit; float shadowT;
+        bool occluded = TraceScene(p + n*RayEpsilon, toLight, 10000.0, triangleId, shadowHit, shadowT);
+        float visible = occluded ? 0.0 : 1.0;
+        // Store ray visibility/intensity only; raster applies its per-pixel
+        // (normal-map-aware) Lambert term to avoid multiplying N.L twice.
+        accumulatedDiffuse += visible * KeyLightIntensity;
+
+        float3 viewDirection = normalize(CameraPosition - p);
+        float3 reflectionDirection = reflect(-viewDirection,n);
+        uint reflectionHit; float reflectionT;
+        if (TraceScene(p+n*RayEpsilon,reflectionDirection,10000.0,triangleId,reflectionHit,reflectionT))
+        {
+            MaterialData hitMaterial = Materials[Triangles[reflectionHit].material];
+            accumulatedReflection += hitMaterial.baseColor.rgb;
+        }
+        else
+        {
+            float sky = saturate(reflectionDirection.y*0.5+0.5);
+            accumulatedReflection += lerp(float3(0.08,0.09,0.11),float3(0.46,0.54,0.66),sky);
+        }
+    }
+    float invSamples = rcp(float(samples));
+    TriangleRadiance[triangleId] = float4(accumulatedDiffuse*invSamples,
+                                          dot(accumulatedReflection,float3(0.2126,0.7152,0.0722))*invSamples);
+}

@@ -18,3 +18,11 @@ La fiche du modèle indique une licence **Creative Commons Attribution**. Conser
 ## Usage prévu
 
 Asset de test pour le prototype LumaTrace : import, lecture des matériaux et textures, comparaison des variantes et benchmark. Ce dépôt ne prétend pas être le créateur du modèle.
+
+## Préparation pour une scène LumaTrace
+
+Le paquet [`Porsche_930_LumaTrace_Scene.zip`](Porsche_930_LumaTrace_Scene.zip) contient une scène avec un seul objet voiture. Le GLB de travail est la variante 1K : elle garde les 241 260 triangles, les 14 matériaux et les 27 images du modèle tout en restant plus légère que la variante 4K.
+
+Le préparateur déplace les images embarquées vers `textures/` et réécrit leurs URI dans le GLB. Les accessors, indices, UV, normales, hiérarchie de nœuds, matériaux, modes alpha et extensions glTF restent dans les données du modèle. La scène n'ajoute ni route ni décor.
+
+Le manifeste `scene.json` est le contrat d'import LumaTrace. Le chargeur de ce dépôt reconnaît `gltf2-model`, charge le GLB et ses images externes, et conserve les matériaux PBR et alpha pour le renderer D3D11.

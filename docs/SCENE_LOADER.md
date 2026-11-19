@@ -19,8 +19,8 @@ Il lit la scène glTF active et conserve les transformations hiérarchiques des 
 
 ## Limites actuelles
 
-Le chargeur rejette les accessors clairsemés, les primitives compressées, les morph targets et les modes glTF autres que les triangles. Le GLB Porsche préparé n'utilise pas ces fonctions. La scène d'essai contient 75 primitives triangulaires, 14 matériaux et 27 textures. Le chargeur prépare les données ; la fenêtre Qt, le rendu D3D11 et le traitement alpha/transmission seront branchés dans les étapes suivantes.
+Le chargeur rejette les accessors clairsemés, les primitives compressées, les morph targets et les modes glTF autres que les triangles. Le GLB Porsche préparé n'utilise pas ces fonctions. La scène d'essai contient 75 primitives triangulaires, 14 matériaux et 27 textures. Le pipeline D3D11 traite les modes opaques, masqués et alpha mélangé ; les extensions de matériaux conservées par le loader n'ont pas encore de modèle d'éclairage dédié.
 
 ## Compilation
 
-La cible `LumaTraceSceneLoader` requiert CMake 3.24+ et Qt 6.2+ (`Core`, `Gui`). Le code est isolé dans LumaTrace ; le dépôt `moteur3d` reste inchangé.
+La cible Windows `CSE_WARP_LumaTrace` requiert CMake 3.24+, Qt 6.2+ (`Core`, `Gui`, `Widgets`) et Direct3D 11. Le code est isolé dans LumaTrace ; le dépôt `moteur3d` reste inchangé. La compilation et l'exécution du pipeline restent à valider.

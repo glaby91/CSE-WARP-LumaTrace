@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <QVector>
+#include "../diagnostics/run_logger.h"
 
 #include <array>
 #include <cstdint>
@@ -88,6 +89,6 @@ struct LoadResult {
 
 // Transactional: callers replace their active scene only after a complete,
 // validated manifest, model, geometry, material, and texture load succeeds.
-LoadResult loadScene(const QString& manifestPath);
+LoadResult loadScene(const QString& manifestPath, diagnostics::RunLogger* logger = nullptr);
 
 } // namespace lumatrace::scene

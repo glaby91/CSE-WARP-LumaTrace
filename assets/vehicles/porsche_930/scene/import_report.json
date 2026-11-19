@@ -1,0 +1,250 @@
+{
+  "source": "free_1975_porsche_911_930_turbo(1).glb",
+  "scene": {
+    "format": "lumatrace-scene-v1",
+    "name": "Porsche 911 (930) Turbo \u2014 LumaTrace",
+    "units": "source-glTF",
+    "objects": [
+      {
+        "id": "porsche_930",
+        "type": "gltf2-model",
+        "file": "porsche_930.glb",
+        "transform": "preserve-source-node-hierarchy"
+      }
+    ],
+    "environment": {
+      "background": [
+        0.035,
+        0.04,
+        0.05
+      ]
+    },
+    "import": {
+      "triangles": 241260,
+      "meshPrimitives": 75,
+      "meshInstances": 75,
+      "materials": 14,
+      "materialIdsUsed": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ],
+      "textures": 27,
+      "textureFiles": [
+        "image_00.png",
+        "image_01.png",
+        "image_02.png",
+        "image_03.png",
+        "image_04.png",
+        "image_05.png",
+        "image_06.png",
+        "image_07.png",
+        "image_08.png",
+        "image_09.png",
+        "image_10.png",
+        "image_11.png",
+        "image_12.png",
+        "image_13.png",
+        "image_14.png",
+        "image_15.png",
+        "image_16.png",
+        "image_17.png",
+        "image_18.png",
+        "image_19.png",
+        "image_20.png",
+        "image_21.png",
+        "image_22.png",
+        "image_23.png",
+        "image_24.png",
+        "image_25.png",
+        "image_26.png"
+      ],
+      "preserveNormals": true,
+      "preserveTexcoord0": true,
+      "preserveMetallicRoughness": true,
+      "preserveAlphaAndGltfExtensions": true
+    }
+  },
+  "extractedImages": [
+    {
+      "index": 0,
+      "file": "image_00.png",
+      "mimeType": "image/png",
+      "byteLength": 119802
+    },
+    {
+      "index": 1,
+      "file": "image_01.png",
+      "mimeType": "image/png",
+      "byteLength": 800294
+    },
+    {
+      "index": 2,
+      "file": "image_02.png",
+      "mimeType": "image/png",
+      "byteLength": 522831
+    },
+    {
+      "index": 3,
+      "file": "image_03.png",
+      "mimeType": "image/png",
+      "byteLength": 636003
+    },
+    {
+      "index": 4,
+      "file": "image_04.png",
+      "mimeType": "image/png",
+      "byteLength": 30656
+    },
+    {
+      "index": 5,
+      "file": "image_05.png",
+      "mimeType": "image/png",
+      "byteLength": 28063
+    },
+    {
+      "index": 6,
+      "file": "image_06.png",
+      "mimeType": "image/png",
+      "byteLength": 442181
+    },
+    {
+      "index": 7,
+      "file": "image_07.png",
+      "mimeType": "image/png",
+      "byteLength": 1251919
+    },
+    {
+      "index": 8,
+      "file": "image_08.png",
+      "mimeType": "image/png",
+      "byteLength": 27042
+    },
+    {
+      "index": 9,
+      "file": "image_09.png",
+      "mimeType": "image/png",
+      "byteLength": 1020888
+    },
+    {
+      "index": 10,
+      "file": "image_10.png",
+      "mimeType": "image/png",
+      "byteLength": 397166
+    },
+    {
+      "index": 11,
+      "file": "image_11.png",
+      "mimeType": "image/png",
+      "byteLength": 1236794
+    },
+    {
+      "index": 12,
+      "file": "image_12.png",
+      "mimeType": "image/png",
+      "byteLength": 941015
+    },
+    {
+      "index": 13,
+      "file": "image_13.png",
+      "mimeType": "image/png",
+      "byteLength": 2443
+    },
+    {
+      "index": 14,
+      "file": "image_14.png",
+      "mimeType": "image/png",
+      "byteLength": 546115
+    },
+    {
+      "index": 15,
+      "file": "image_15.png",
+      "mimeType": "image/png",
+      "byteLength": 276729
+    },
+    {
+      "index": 16,
+      "file": "image_16.png",
+      "mimeType": "image/png",
+      "byteLength": 549483
+    },
+    {
+      "index": 17,
+      "file": "image_17.png",
+      "mimeType": "image/png",
+      "byteLength": 782212
+    },
+    {
+      "index": 18,
+      "file": "image_18.png",
+      "mimeType": "image/png",
+      "byteLength": 1071445
+    },
+    {
+      "index": 19,
+      "file": "image_19.png",
+      "mimeType": "image/png",
+      "byteLength": 303576
+    },
+    {
+      "index": 20,
+      "file": "image_20.png",
+      "mimeType": "image/png",
+      "byteLength": 119413
+    },
+    {
+      "index": 21,
+      "file": "image_21.png",
+      "mimeType": "image/png",
+      "byteLength": 387310
+    },
+    {
+      "index": 22,
+      "file": "image_22.png",
+      "mimeType": "image/png",
+      "byteLength": 452162
+    },
+    {
+      "index": 23,
+      "file": "image_23.png",
+      "mimeType": "image/png",
+      "byteLength": 383570
+    },
+    {
+      "index": 24,
+      "file": "image_24.png",
+      "mimeType": "image/png",
+      "byteLength": 387310
+    },
+    {
+      "index": 25,
+      "file": "image_25.png",
+      "mimeType": "image/png",
+      "byteLength": 324664
+    },
+    {
+      "index": 26,
+      "file": "image_26.png",
+      "mimeType": "image/png",
+      "byteLength": 19677
+    }
+  ],
+  "sourceExtensionsUsed": [
+    "KHR_materials_specular",
+    "KHR_materials_clearcoat",
+    "KHR_materials_transmission"
+  ],
+  "sourceExtensionsRequired": [],
+  "outputBytes": 8907244
+}

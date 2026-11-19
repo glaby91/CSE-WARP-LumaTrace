@@ -1,0 +1,76 @@
+{
+  "format": "lumatrace-scene-v1",
+  "name": "Porsche 911 (930) Turbo \u2014 LumaTrace",
+  "units": "source-glTF",
+  "objects": [
+    {
+      "id": "porsche_930",
+      "type": "gltf2-model",
+      "file": "porsche_930.glb",
+      "transform": "preserve-source-node-hierarchy"
+    }
+  ],
+  "environment": {
+    "background": [
+      0.035,
+      0.04,
+      0.05
+    ]
+  },
+  "import": {
+    "triangles": 241260,
+    "meshPrimitives": 75,
+    "meshInstances": 75,
+    "materials": 14,
+    "materialIdsUsed": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13
+    ],
+    "textures": 27,
+    "textureFiles": [
+      "image_00.png",
+      "image_01.png",
+      "image_02.png",
+      "image_03.png",
+      "image_04.png",
+      "image_05.png",
+      "image_06.png",
+      "image_07.png",
+      "image_08.png",
+      "image_09.png",
+      "image_10.png",
+      "image_11.png",
+      "image_12.png",
+      "image_13.png",
+      "image_14.png",
+      "image_15.png",
+      "image_16.png",
+      "image_17.png",
+      "image_18.png",
+      "image_19.png",
+      "image_20.png",
+      "image_21.png",
+      "image_22.png",
+      "image_23.png",
+      "image_24.png",
+      "image_25.png",
+      "image_26.png"
+    ],
+    "preserveNormals": true,
+    "preserveTexcoord0": true,
+    "preserveMetallicRoughness": true,
+    "preserveAlphaAndGltfExtensions": true
+  }
+}

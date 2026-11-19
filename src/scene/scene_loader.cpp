@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <utility>
 
 namespace lumatrace::scene {
@@ -50,7 +51,9 @@ bool jsonVec(const QJsonValue& value, int count, float* out, QString& error,
     return true;
 }
 
-QByteArray decodeDataUri(const QString& uri, QString& error) {
+QByteArray decodeDataUri(const QString& uri, QString& error, diagnostics::RunLogger* logger) {
+    std::optional<diagnostics::RunLogger::Scope> timing;
+    if(logger)timing.emplace(logger->scope(QStringLiteral("decodeDataUri · base64/url")));
     const int comma = uri.indexOf(',');
     if (!uri.startsWith(QStringLiteral("data:")) || comma < 0) {
         error = QStringLiteral("Malformed glTF data URI.");
@@ -86,18 +89,20 @@ bool safeFile(const QString& root, const QString& relative, QString& absolute, Q
     const QString canonical = QFileInfo(candidate).canonicalFilePath();
     if (rootCanonical.isEmpty() || canonical.isEmpty())
         return fail(error, QStringLiteral("Missing scene resource: %1").arg(relative));
-    const QString relative = QDir(rootCanonical).relativeFilePath(canonical);
-    if (relative == QStringLiteral("..") || relative.startsWith(QStringLiteral("../")) ||
-        relative.startsWith(QStringLiteral("..\\")) || QDir::isAbsolutePath(relative))
-        return fail(error, QStringLiteral("Scene resource escapes its root: %1").arg(relative));
+    const QString relativePath = QDir(rootCanonical).relativeFilePath(canonical);
+    if (relativePath == QStringLiteral("..") || relativePath.startsWith(QStringLiteral("../")) ||
+        relativePath.startsWith(QStringLiteral("..\\")) || QDir::isAbsolutePath(relativePath))
+        return fail(error, QStringLiteral("Scene resource escapes its root: %1").arg(relativePath));
     absolute = canonical;
     return true;
 }
 
 bool readUri(const QString& baseDir, const QString& uri, QByteArray& bytes,
-             QString* canonicalPath, QString& error) {
+             QString* canonicalPath, QString& error, diagnostics::RunLogger* logger) {
+    std::optional<diagnostics::RunLogger::Scope> timing;
+    if(logger)timing.emplace(logger->scope(QStringLiteral("readUri · ")+uri));
     if (uri.startsWith(QStringLiteral("data:"))) {
-        bytes = decodeDataUri(uri, error);
+        bytes = decodeDataUri(uri, error,logger);
         if (!error.isEmpty()) return false;
         if (canonicalPath) canonicalPath->clear();
         return true;
@@ -113,7 +118,7 @@ bool readUri(const QString& baseDir, const QString& uri, QByteArray& bytes,
     return true;
 }
 
-bool readGltf(const QString& path, GltfData& out, QString& error) {
+bool readGltf(const QString& path, GltfData& out, QString& error, diagnostics::RunLogger* logger) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
         return fail(error, QStringLiteral("Cannot open model %1: %2").arg(path, file.errorString()));
@@ -161,7 +166,7 @@ bool readGltf(const QString& path, GltfData& out, QString& error) {
         const auto buffer = bufferDocs[i].toObject();
         QByteArray bytes;
         if (buffer.contains(QStringLiteral("uri"))) {
-            if (!readUri(baseDir, buffer.value(QStringLiteral("uri")).toString(), bytes, nullptr, error)) return false;
+            if (!readUri(baseDir, buffer.value(QStringLiteral("uri")).toString(), bytes, nullptr, error,logger)) return false;
         } else if (i == 0 && !glbBinary.isEmpty()) {
             bytes = glbBinary;
         } else {
@@ -215,7 +220,10 @@ double readComponent(const char* ptr, int type, bool normalized) {
     }
 }
 
-bool accessor(const GltfData& gltf, int index, AccessorData& result, QString& error) {
+bool accessor(const GltfData& gltf, int index, AccessorData& result, QString& error,
+              diagnostics::RunLogger* logger = nullptr) {
+    std::optional<diagnostics::RunLogger::Scope> timing;
+    if(logger)timing.emplace(logger->scope(QStringLiteral("accessor · index %1").arg(index)));
     const auto accessors = gltf.json.value(QStringLiteral("accessors")).toArray();
     const auto views = gltf.json.value(QStringLiteral("bufferViews")).toArray();
     if (index < 0 || index >= accessors.size()) return fail(error, QStringLiteral("Accessor index out of range."));
@@ -326,7 +334,8 @@ TextureReference textureReference(const QJsonObject& object) {
     return result;
 }
 
-bool loadTextures(const GltfData& gltf, const QString& modelDir, Scene& scene, QString& error) {
+bool loadTextures(const GltfData& gltf, const QString& modelDir, Scene& scene, QString& error,
+                  diagnostics::RunLogger* logger) {
     const auto images = gltf.json.value(QStringLiteral("images")).toArray();
     const auto textures = gltf.json.value(QStringLiteral("textures")).toArray();
     const auto views = gltf.json.value(QStringLiteral("bufferViews")).toArray();
@@ -334,11 +343,13 @@ bool loadTextures(const GltfData& gltf, const QString& modelDir, Scene& scene, Q
     QVector<QString> imagePaths(images.size());
     QVector<QString> imageNames(images.size());
     for (int i = 0; i < images.size(); ++i) {
+        std::optional<diagnostics::RunLogger::Scope> imageTiming;
+        if(logger)imageTiming.emplace(logger->scope(QStringLiteral("image decode · %1/%2").arg(i+1).arg(images.size())));
         const auto imageDoc = images[i].toObject();
         QByteArray bytes;
         QString sourcePath;
         if (imageDoc.contains(QStringLiteral("uri"))) {
-            if (!readUri(modelDir, imageDoc.value(QStringLiteral("uri")).toString(), bytes, &sourcePath, error)) return false;
+            if (!readUri(modelDir, imageDoc.value(QStringLiteral("uri")).toString(), bytes, &sourcePath, error,logger)) return false;
         } else if (imageDoc.contains(QStringLiteral("bufferView"))) {
             const int vi = imageDoc.value(QStringLiteral("bufferView")).toInt(-1);
             if (vi < 0 || vi >= views.size()) return fail(error, QStringLiteral("Invalid embedded image bufferView."));
@@ -425,14 +436,16 @@ void expandBounds(Bounds& bounds, Vec3 p) {
 
 bool readAttribute(const GltfData& gltf, const QJsonObject& attrs, const QString& name,
                    int expected, int vertexCount, QVector<double>& values, QString& error,
-                   bool required = false) {
+                   bool required = false, diagnostics::RunLogger* logger = nullptr) {
+    std::optional<diagnostics::RunLogger::Scope> timing;
+    if(logger)timing.emplace(logger->scope(QStringLiteral("readAttribute · ")+name));
     if (!attrs.contains(name)) {
         if (required) return fail(error, QStringLiteral("glTF primitive lacks required %1 attribute.").arg(name));
         values.clear();
         return true;
     }
     AccessorData data;
-    if (!accessor(gltf, attrs.value(name).toInt(-1), data, error)) return false;
+    if (!accessor(gltf, attrs.value(name).toInt(-1), data, error,logger)) return false;
     if (data.components != expected || data.values.size() / expected != vertexCount)
         return fail(error, QStringLiteral("Invalid %1 attribute dimensions.").arg(name));
     values = std::move(data.values);
@@ -441,22 +454,25 @@ bool readAttribute(const GltfData& gltf, const QJsonObject& attrs, const QString
 
 bool appendPrimitive(const GltfData& gltf, int meshIndex, const QJsonObject& mesh,
                      const QJsonObject& primitiveDoc, const QJsonObject& node,
-                     const Matrix4& world, int materialOffset, Scene& scene, QString& error) {
+                     const Matrix4& world, int materialOffset, Scene& scene, QString& error,
+                     diagnostics::RunLogger* logger) {
+    std::optional<diagnostics::RunLogger::Scope> timing;
+    if(logger)timing.emplace(logger->scope(QStringLiteral("appendPrimitive · %1").arg(mesh.value(QStringLiteral("name")).toString(QStringLiteral("mesh_%1").arg(meshIndex)))));
     if (primitiveDoc.value(QStringLiteral("mode")).toInt(4) != 4)
         return fail(error, QStringLiteral("Only triangle-list glTF primitives are supported."));
     const auto attrs = primitiveDoc.value(QStringLiteral("attributes")).toObject();
     AccessorData pos;
-    if (!accessor(gltf, attrs.value(QStringLiteral("POSITION")).toInt(-1), pos, error)) return false;
+    if (!accessor(gltf, attrs.value(QStringLiteral("POSITION")).toInt(-1), pos, error,logger)) return false;
     if (pos.components != 3 || pos.values.size() % 3)
         return fail(error, QStringLiteral("Invalid POSITION accessor."));
     const int vertexCount = pos.values.size() / 3;
     QVector<double> normals, uv, tangents, colors;
-    if (!readAttribute(gltf, attrs, QStringLiteral("NORMAL"), 3, vertexCount, normals, error)) return false;
-    if (!readAttribute(gltf, attrs, QStringLiteral("TEXCOORD_0"), 2, vertexCount, uv, error)) return false;
-    if (!readAttribute(gltf, attrs, QStringLiteral("TANGENT"), 4, vertexCount, tangents, error)) return false;
+    if (!readAttribute(gltf, attrs, QStringLiteral("NORMAL"), 3, vertexCount, normals, error,false,logger)) return false;
+    if (!readAttribute(gltf, attrs, QStringLiteral("TEXCOORD_0"), 2, vertexCount, uv, error,false,logger)) return false;
+    if (!readAttribute(gltf, attrs, QStringLiteral("TANGENT"), 4, vertexCount, tangents, error,false,logger)) return false;
     if (attrs.contains(QStringLiteral("COLOR_0"))) {
         AccessorData colorData;
-        if (!accessor(gltf, attrs.value(QStringLiteral("COLOR_0")).toInt(-1), colorData, error)) return false;
+        if (!accessor(gltf, attrs.value(QStringLiteral("COLOR_0")).toInt(-1), colorData, error,logger)) return false;
         if ((colorData.components != 3 && colorData.components != 4) ||
             colorData.values.size() / colorData.components != vertexCount)
             return fail(error, QStringLiteral("Invalid COLOR_0 attribute dimensions."));
@@ -494,7 +510,7 @@ bool appendPrimitive(const GltfData& gltf, int meshIndex, const QJsonObject& mes
     }
     if (primitiveDoc.contains(QStringLiteral("indices"))) {
         AccessorData indexData;
-        if (!accessor(gltf, primitiveDoc.value(QStringLiteral("indices")).toInt(-1), indexData, error)) return false;
+        if (!accessor(gltf, primitiveDoc.value(QStringLiteral("indices")).toInt(-1), indexData, error,logger)) return false;
         if (indexData.components != 1 || indexData.values.size() % 3)
             return fail(error, QStringLiteral("Invalid triangle index accessor."));
         out.indices.reserve(size_t(indexData.values.size()));
@@ -514,11 +530,14 @@ bool appendPrimitive(const GltfData& gltf, int meshIndex, const QJsonObject& mes
 }
 
 bool traverseNode(const GltfData& gltf, int index, const Matrix4& parent,
-                  int materialOffset, QVector<bool>& active, Scene& scene, QString& error) {
+                  int materialOffset, QVector<bool>& active, Scene& scene, QString& error,
+                  diagnostics::RunLogger* logger) {
     const auto nodes = gltf.json.value(QStringLiteral("nodes")).toArray();
     const auto meshes = gltf.json.value(QStringLiteral("meshes")).toArray();
     if (index < 0 || index >= nodes.size()) return fail(error, QStringLiteral("glTF node index out of range."));
     if (active[index]) return fail(error, QStringLiteral("Cycle in glTF node hierarchy."));
+    std::optional<diagnostics::RunLogger::Scope> timing;
+    if(logger){const QString label=nodes[index].toObject().value(QStringLiteral("name")).toString(QStringLiteral("node_%1").arg(index));timing.emplace(logger->scope(QStringLiteral("traverseNode · ")+label));}
     active[index] = true;
     const auto node = nodes[index].toObject();
     QString transformError;
@@ -531,21 +550,39 @@ bool traverseNode(const GltfData& gltf, int index, const Matrix4& parent,
         const auto mesh = meshes[meshIndex].toObject();
         const auto primitives = mesh.value(QStringLiteral("primitives")).toArray();
         for (const auto& value : primitives)
-            if (!appendPrimitive(gltf, meshIndex, mesh, value.toObject(), node, world, materialOffset, scene, error)) return false;
+            if (!appendPrimitive(gltf, meshIndex, mesh, value.toObject(), node, world, materialOffset, scene, error,logger)) return false;
     }
     for (const auto& child : node.value(QStringLiteral("children")).toArray())
-        if (!traverseNode(gltf, child.toInt(-1), world, materialOffset, active, scene, error)) return false;
+        if (!traverseNode(gltf, child.toInt(-1), world, materialOffset, active, scene, error,logger)) return false;
     active[index] = false;
     return true;
 }
 
-bool loadModel(const QString& path, Scene& scene, QString& error) {
+bool loadModel(const QString& path, Scene& scene, QString& error, diagnostics::RunLogger* logger) {
+    std::optional<diagnostics::RunLogger::Scope> modelTiming;
+    if(logger)modelTiming.emplace(logger->scope(QStringLiteral("loadModel · ")+QFileInfo(path).fileName()));
     GltfData gltf;
-    if (!readGltf(path, gltf, error)) return false;
+    {
+        std::optional<diagnostics::RunLogger::Scope> timing;
+        if(logger)timing.emplace(logger->scope(QStringLiteral("readGltf · JSON, GLB et buffers BIN")));
+        if (!readGltf(path, gltf, error,logger)) return false;
+        if(logger)logger->note(QStringLiteral("GLB BIN extrait par copie ; aucun décodage Draco/Meshopt demandé par cet asset."));
+    }
     const QString modelDir = QFileInfo(path).absolutePath();
     const int textureOffset = scene.textures.size();
     const int materialOffset = scene.materials.size();
-    if (!loadTextures(gltf, modelDir, scene, error) || !loadMaterials(gltf, scene, error)) return false;
+    {
+        std::optional<diagnostics::RunLogger::Scope> timing;
+        if(logger)timing.emplace(logger->scope(QStringLiteral("loadTextures · décodage QImage")));
+        if(!loadTextures(gltf,modelDir,scene,error,logger))return false;
+        if(logger)logger->note(QStringLiteral("Textures décodées : %1").arg(scene.textures.size()-textureOffset));
+    }
+    {
+        std::optional<diagnostics::RunLogger::Scope> timing;
+        if(logger)timing.emplace(logger->scope(QStringLiteral("loadMaterials · PBR et alpha")));
+        if(!loadMaterials(gltf,scene,error))return false;
+        if(logger)logger->note(QStringLiteral("Matériaux chargés : %1").arg(scene.materials.size()-materialOffset));
+    }
     if (scene.materials.size() == materialOffset)
         scene.materials.push_back(Material{QStringLiteral("default")});
     for (int i = materialOffset; i < scene.materials.size(); ++i) {
@@ -572,8 +609,12 @@ bool loadModel(const QString& path, Scene& scene, QString& error) {
         for (int i=0;i<nodes.size();++i) if (!isChild[i]) roots.append(i);
     }
     QVector<bool> active(nodes.size(), false);
-    for (const auto& root : roots)
-        if (!traverseNode(gltf, root.toInt(-1), identity(), materialOffset, active, scene, error)) return false;
+    {
+        std::optional<diagnostics::RunLogger::Scope> timing;
+        if(logger)timing.emplace(logger->scope(QStringLiteral("traverseNode · hiérarchie et primitives")));
+        for (const auto& root : roots)
+            if (!traverseNode(gltf, root.toInt(-1), identity(), materialOffset, active, scene, error,logger)) return false;
+    }
     if (scene.primitives.isEmpty() || !scene.triangleCount)
         return fail(error, QStringLiteral("The glTF scene contains no triangle primitives."));
     for (const auto& material : scene.materials) {
@@ -587,12 +628,18 @@ bool loadModel(const QString& path, Scene& scene, QString& error) {
 }
 } // namespace
 
-LoadResult loadScene(const QString& manifestPath) {
+LoadResult loadScene(const QString& manifestPath, diagnostics::RunLogger* logger) {
+    std::optional<diagnostics::RunLogger::Scope> sceneTiming;
+    if(logger)sceneTiming.emplace(logger->scope(QStringLiteral("scene::loadScene · ")+manifestPath));
     LoadResult result;
     const QFileInfo manifestInfo(manifestPath);
     const QString root = manifestInfo.absolutePath();
     QJsonObject manifest;
-    if (!readJsonObject(manifestInfo.absoluteFilePath(), manifest, result.error)) return result;
+    {
+        std::optional<diagnostics::RunLogger::Scope> timing;
+        if(logger)timing.emplace(logger->scope(QStringLiteral("manifest · ouverture et lecture JSON")));
+        if (!readJsonObject(manifestInfo.absoluteFilePath(), manifest, result.error)) return result;
+    }
     if (manifest.value(QStringLiteral("format")).toString() != QStringLiteral("lumatrace-scene-v1")) {
         result.error = QStringLiteral("Expected lumatrace-scene-v1 manifest.");
         return result;
@@ -611,7 +658,7 @@ LoadResult loadScene(const QString& manifestPath) {
         QString modelPath;
         if (!safeFile(root, object.value(QStringLiteral("file")).toString(), modelPath, result.error)) return result;
         if (result.scene.modelPath.isEmpty()) result.scene.modelPath = modelPath;
-        if (!loadModel(modelPath, result.scene, result.error)) {
+        if (!loadModel(modelPath, result.scene, result.error,logger)) {
             result.scene = Scene{}; // discard partial state; preserve transactional load behavior
             return result;
         }
