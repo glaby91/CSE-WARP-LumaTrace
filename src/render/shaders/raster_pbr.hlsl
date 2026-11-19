@@ -59,6 +59,8 @@ float3 ApplyNormalMap(float3 n, float3 tangent, float3 mapped)
 float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
 {
     float4 base = BaseColorMap.Sample(MaterialSampler, input.uv) * BaseColorFactor * input.color;
+    // Direct-lit non-emissive racing red paint override for the Porsche body.
+    if (MaterialPadding.x != 0) base.rgb = float3(0.72, 0.012, 0.028);
     const uint alphaMode = (uint)SurfaceFactors.w;
     if (alphaMode == 1 && base.a < SurfaceFactors.z) discard;
 
@@ -78,6 +80,24 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     n = ApplyNormalMap(n, tangent, normalSample);
     float ao = lerp(1.0, OcclusionMap.Sample(MaterialSampler, input.uv).r, saturate(DetailFactors.y));
     float3 emissive = EmissiveMap.Sample(MaterialSampler, input.uv).rgb * EmissiveFactor.rgb;
+
+    // World-space side graphics: an ivory shoulder pinstripe and graphite/silver
+    // diagonal sill bands. These are albedo, not emissive paint.
+    if (MaterialPadding.x != 0)
+    {
+        float sideFacing = smoothstep(0.42, 0.78, abs(normalize(input.normal).x));
+        float z = input.worldPosition.z;
+        float y = input.worldPosition.y;
+        float bodySpan = smoothstep(-2.62, -2.42, z) * (1.0 - smoothstep(2.32, 2.52, z));
+        float pinLine = 1.0 - smoothstep(0.018, 0.038, abs(y - (1.17 + 0.025 * sin(z * 1.2)));
+        float slashCoord = y - (0.48 + 0.105 * (z + 2.4));
+        float graphiteBand = 1.0 - smoothstep(0.045, 0.075, abs(slashCoord));
+        float silverBand = 1.0 - smoothstep(0.026, 0.048, abs(slashCoord - 0.085));
+        float graphics = sideFacing * bodySpan;
+        base.rgb = lerp(base.rgb, float3(0.055, 0.060, 0.070), graphiteBand * graphics);
+        base.rgb = lerp(base.rgb, float3(0.62, 0.63, 0.59), silverBand * graphics);
+        base.rgb = lerp(base.rgb, float3(0.90, 0.84, 0.70), pinLine * graphics);
+    }
 
     uint triangleId = TriangleBase + primitiveId;
     float4 triLight = TriangleLighting[triangleId];
