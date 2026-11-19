@@ -22,16 +22,16 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
       - name: Report scene asset hydration
         shell: pwsh
         run: |
           $asset = 'assets/vehicles/porsche_930/scene/porsche_930.glb'
           $header = Get-Content $asset -TotalCount 1
           if ($header -like 'version https://git-lfs.github.com/spec/v1') {
+            Add-Content $env:GITHUB_ENV 'LUMATRACE_SCENE_READY=false'
             Write-Warning 'Git LFS payloads are unavailable on this branch checkout. The Qt/D3D11 executable will compile, but the packaged scene is not runnable until the GLB and textures are uploaded to LFS.'
           } else {
+            Add-Content $env:GITHUB_ENV 'LUMATRACE_SCENE_READY=true'
             Write-Host 'Scene model is hydrated.'
           }
       - uses: jurplel/install-qt-action@v4
@@ -61,6 +61,7 @@ jobs:
       - name: Deploy Qt runtime beside the executable
         run: windeployqt --release --no-translations build/Release/CSE_WARP_LumaTrace.exe
       - name: Capture WARP renders for 1, 2 and 4 samples
+        if: env.LUMATRACE_SCENE_READY == 'true'
         shell: pwsh
         run: |
           $env:LUMATRACE_FORCE_WARP = '1'
@@ -113,6 +114,7 @@ jobs:
           if-no-files-found: error
       - name: Upload WARP benchmark images and timings
         uses: actions/upload-artifact@v4
+        if: env.LUMATRACE_SCENE_READY == 'true'
         with:
           name: CSE-WARP-LumaTrace-warp-benchmark
           path: ${{ runner.temp }}/LumaTrace-benchmark/
