@@ -2,7 +2,7 @@ name: Build LumaTrace (Windows DX11)
 
 on:
   push:
-    branches: [main]
+    branches: [main, stage-1.5-assets]
     paths:
       - 'CMakeLists.txt'
       - 'src/**'
