@@ -38,10 +38,10 @@ cbuffer LightConstants : register(b0)
     uint SamplesPerTriangle; // clamp to [1,4]
     float3 CameraPosition;
     float RayEpsilon;
-    float3 LightPosition;
-    float KeyLightIntensity;
-    float3 KeyLightColor;
-    float LightAngularRadius;
+    float3 LightPosition; float KeyLightIntensity;
+    float3 KeyLightColor; float LightAngularRadius;
+    float3 LightPosition2; float KeyLightIntensity2;
+    float3 KeyLightColor2; float LightAngularRadius2;
 };
 
 [numthreads(8,8,1)]
@@ -166,26 +166,24 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
     {
         float3 p = SamplePoint(tri, sampleIndex, samples);
         float3 n = normalize(tri.n0 + tri.n1 + tri.n2);
-        float3 toCenter = LightPosition - p;
-        float centerDistance = max(length(toCenter), 1.e-4);
-        float3 lightDirection = toCenter / centerDistance;
-        float3 lightRight = normalize(cross(lightDirection, float3(0.0, 1.0, 0.0)));
-        float3 lightUp = normalize(cross(lightDirection, lightRight));
         float2 lightSample = SampleAreaLight(sampleIndex, samples);
-        float3 sampledPosition = LightPosition + LightAngularRadius *
-            (lightRight * lightSample.x + lightUp * lightSample.y);
-        float3 toLight = sampledPosition - p;
-        float lightDistance = length(toLight);
-        toLight /= max(lightDistance, 1.e-4);
-        uint shadowHit; float shadowT; float3 shadowBarycentrics;
-        bool occluded = TraceScene(p + n*RayEpsilon, toLight, max(RayEpsilon,lightDistance-RayEpsilon), triangleId,
-                                   shadowHit, shadowT, shadowBarycentrics);
-        float visible = occluded ? 0.0 : 1.0;
-        // Raster applies its per-pixel Lambert term; compute contributes shadowed
-        // inverse-square point-light radiance only.
-        accumulatedDiffuse += visible * KeyLightIntensity * KeyLightColor
-                            / max(lightDistance * lightDistance, 0.25);
-
+        [unroll] for(uint lightIndex=0;lightIndex<2;++lightIndex){
+            float3 lightPosition=lightIndex==0?LightPosition:LightPosition2;
+            float lightIntensity=lightIndex==0?KeyLightIntensity:KeyLightIntensity2;
+            float3 lightColor=lightIndex==0?KeyLightColor:KeyLightColor2;
+            float lightRadius=lightIndex==0?LightAngularRadius:LightAngularRadius2;
+            float3 toCenter=lightPosition-p;float centerDistance=max(length(toCenter),1.e-4);float3 centerDirection=toCenter/centerDistance;
+            float3 lightRight=cross(centerDirection,float3(0.0,1.0,0.0));
+            if(dot(lightRight,lightRight)<1.e-6)lightRight=float3(1.0,0.0,0.0);
+            lightRight=normalize(lightRight);
+            float3 lightUp=normalize(cross(centerDirection,lightRight));
+            float3 sampledPosition=lightPosition+lightRadius*(lightRight*lightSample.x+lightUp*lightSample.y);
+            float3 toLight=sampledPosition-p;float lightDistance=length(toLight);toLight/=max(lightDistance,1.e-4);
+            uint shadowHit;float shadowT;float3 shadowBarycentrics;
+            bool occluded=TraceScene(p+n*RayEpsilon,toLight,max(RayEpsilon,lightDistance-RayEpsilon),triangleId,shadowHit,shadowT,shadowBarycentrics);
+            float visible=occluded?0.0:1.0;
+            accumulatedDiffuse+=visible*lightIntensity*lightColor*saturate(dot(n,toLight))/max(lightDistance*lightDistance,0.25);
+        }
         float3 viewDirection = normalize(CameraPosition - p);
         float3 reflectionDirection = reflect(-viewDirection,n);
         uint reflectionHit; float reflectionT; float3 reflectionBarycentrics;

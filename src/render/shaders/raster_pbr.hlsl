@@ -39,6 +39,8 @@ cbuffer AreaLightConstants : register(b2)
 {
     float3 LightPosition; float LightIntensity;
     float3 LightColor; float LightRadius;
+    float3 LightPosition2; float LightIntensity2;
+    float3 LightColor2; float LightRadius2;
 };
 
 VSOutput VSMain(VSInput input)
@@ -67,7 +69,7 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     float4 base = BaseColorMap.Sample(MaterialSampler, input.uv) * BaseColorFactor * input.color;
     const uint alphaMode = (uint)SurfaceFactors.w;
     if (alphaMode == 1 && base.a < SurfaceFactors.z) discard;
-    if (DetailFactors.z > 0.5) { float3 glow=float3(12.0, 9.0, 5.5); return float4(pow(glow/(1.0+glow),1.0/2.2),1.0); }
+    if (DetailFactors.z > 0.5) { float3 glow=EmissiveFactor.rgb; return float4(pow(glow/(1.0+glow),1.0/2.2),1.0); }
 
     float4 mr = MetallicRoughnessMap.Sample(MaterialSampler, input.uv);
     float metallic = saturate(SurfaceFactors.x * mr.b);
@@ -89,20 +91,24 @@ float4 PSMain(VSOutput input, uint primitiveId : SV_PrimitiveID) : SV_Target0
     uint triangleId = TriangleBase + primitiveId;
     float4 triLight = TriangleLighting[triangleId];
     float3 viewDirection = normalize(CameraPosition.xyz - input.worldPosition);
-    float3 toLight = LightPosition - input.worldPosition;
-    float lightDistance = max(length(toLight), 1.e-4);
-    float3 lightDirection = toLight / lightDistance;
-    float ndotl = saturate(dot(n, lightDirection));
     float3 fillDirection = normalize(float3(0.65, 0.35, -0.67));
     float fillNdotL = saturate(dot(n, fillDirection));
     float3 fill = fillNdotL * float3(0.04, 0.055, 0.065);
-    float3 diffuse = base.rgb * (0.32 + ndotl * triLight.rgb + fill) * (1.0 - metallic) * ao;
-    float3 halfVector = normalize(lightDirection + viewDirection);
+    float3 diffuse = base.rgb * (0.32 + triLight.rgb + fill) * (1.0 - metallic) * ao;
     float specularPower = lerp(96.0, 4.0, roughness);
-    float3 specular = lerp(float3(0.04, 0.04, 0.04), base.rgb, metallic)
-                    * pow(saturate(dot(n, halfVector)), specularPower)
-                    * lerp(1.0, 0.18, roughness) * LightColor * LightIntensity
-                    / max(lightDistance * lightDistance, 0.25);
+    float3 specular = 0.0;
+    float3 toLight1 = LightPosition - input.worldPosition;
+    float distance1 = max(length(toLight1), 1.e-4);
+    float3 lightDirection1 = toLight1 / distance1;
+    float3 halfVector1 = normalize(lightDirection1 + viewDirection);
+    specular += lerp(float3(0.04,0.04,0.04),base.rgb,metallic) * LightColor * LightIntensity
+              * pow(saturate(dot(n,halfVector1)),specularPower) * lerp(1.0,0.18,roughness) / max(distance1*distance1,0.25);
+    float3 toLight2 = LightPosition2 - input.worldPosition;
+    float distance2 = max(length(toLight2), 1.e-4);
+    float3 lightDirection2 = toLight2 / distance2;
+    float3 halfVector2 = normalize(lightDirection2 + viewDirection);
+    specular += lerp(float3(0.04,0.04,0.04),base.rgb,metallic) * LightColor2 * LightIntensity2
+              * pow(saturate(dot(n,halfVector2)),specularPower) * lerp(1.0,0.18,roughness) / max(distance2*distance2,0.25);
     float3 color = diffuse + specular + emissive
                  + triLight.a * metallic * base.rgb * (1.0 - roughness) * 0.25;
     color = pow(saturate(color / (1.0 + color)), 1.0 / 2.2);
