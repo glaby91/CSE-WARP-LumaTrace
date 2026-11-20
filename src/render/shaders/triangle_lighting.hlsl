@@ -222,10 +222,11 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
     uint samples = clamp(SamplesPerTriangle, 1, 4);
     float3 accumulatedDiffuse = 0.0;
     float3 accumulatedReflection = 0.0;
+    // The interpolated face normal is identical for every point sampled on this triangle.
+    float3 n = normalize(tri.n0 + tri.n1 + tri.n2);
     [loop] for (uint sampleIndex = 0; sampleIndex < samples; ++sampleIndex)
     {
         float3 p = SamplePoint(tri, sampleIndex, samples);
-        float3 n = normalize(tri.n0 + tri.n1 + tri.n2);
         float2 lightSample = SampleAreaLight(sampleIndex, samples);
         [unroll] for (uint lightIndex = 0; lightIndex < 2; ++lightIndex)
         {
@@ -238,12 +239,17 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
             float3 toCenter = lightPosition - p;
             float centerDistance = max(length(toCenter), 1.e-4);
             float3 centerDirection = toCenter / centerDistance;
-            float3 lightRight = cross(centerDirection, float3(0.0, 1.0, 0.0));
-            if (dot(lightRight, lightRight) < 1.e-6) lightRight = float3(1.0, 0.0, 0.0);
-            lightRight = normalize(lightRight);
-            float3 lightUp = normalize(cross(centerDirection, lightRight));
-            float3 sampledPosition = lightPosition
-                + lightRadius * (lightRight * lightSample.x + lightUp * lightSample.y);
+            float3 sampledPosition = lightPosition;
+            // The 1-sample path uses the exact light center; skip a basis that
+            // would only be multiplied by zero. Multi-sample output is unchanged.
+            if (lightRadius > 0.0 && (lightSample.x != 0.0 || lightSample.y != 0.0))
+            {
+                float3 lightRight = cross(centerDirection, float3(0.0, 1.0, 0.0));
+                if (dot(lightRight, lightRight) < 1.e-6) lightRight = float3(1.0, 0.0, 0.0);
+                lightRight = normalize(lightRight);
+                float3 lightUp = normalize(cross(centerDirection, lightRight));
+                sampledPosition += lightRadius * (lightRight * lightSample.x + lightUp * lightSample.y);
+            }
             float3 toLight = sampledPosition - p;
             float lightDistance = length(toLight);
             toLight /= max(lightDistance, 1.e-4);
