@@ -7,6 +7,7 @@
 #include <QCursor>
 #include <QFocusEvent>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
