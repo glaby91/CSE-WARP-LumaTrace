@@ -230,6 +230,9 @@ SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
         target.childCount=std::uint32_t(children.size());
         return at;
     };
+    // Reserve the measured BVH4 node fraction before recursive emission.
+    // This avoids repeated vector growth on the Porsche scene without changing node order.
+    out.nodes.reserve(binary.size()*3u/4u);
     emitWide(emitWide,binaryRoot);
     const auto& root=out.nodes.front();
     out.bounds.minimum={root.minX,root.minY,root.minZ};
