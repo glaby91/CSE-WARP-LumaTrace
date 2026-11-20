@@ -52,23 +52,32 @@ struct BuildBounds {
 SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
     SceneBvh out;
     out.triangles.reserve(size_t(source.triangleCount));
+    std::vector<Vec3> triangleCentroids;
+    triangleCentroids.reserve(size_t(source.triangleCount));
     for(const auto& primitive:source.primitives) {
+        std::vector<Vec3> transformedPositions(primitive.vertices.size());
+        std::vector<Vec3> transformedNormals(primitive.vertices.size());
+        for(size_t i=0;i<primitive.vertices.size();++i){
+            transformedPositions[i]=point(primitive.worldTransform,primitive.vertices[i].position);
+            transformedNormals[i]=normal(primitive.worldTransform,primitive.vertices[i].normal);
+        }
         const auto& idx=primitive.indices;
         for(size_t k=0;k+2<idx.size();k+=3) {
             const auto& a=primitive.vertices[idx[k]];
             const auto& b=primitive.vertices[idx[k+1]];
             const auto& c=primitive.vertices[idx[k+2]];
             GpuTriangle t{};
-            t.p0=point(primitive.worldTransform,a.position);
-            t.p1=point(primitive.worldTransform,b.position);
-            t.p2=point(primitive.worldTransform,c.position);
-            t.n0=normal(primitive.worldTransform,a.normal);
-            t.n1=normal(primitive.worldTransform,b.normal);
-            t.n2=normal(primitive.worldTransform,c.normal);
+            t.p0=transformedPositions[idx[k]];
+            t.p1=transformedPositions[idx[k+1]];
+            t.p2=transformedPositions[idx[k+2]];
+            t.n0=transformedNormals[idx[k]];
+            t.n1=transformedNormals[idx[k+1]];
+            t.n2=transformedNormals[idx[k+2]];
             t.uv0=a.uv0; t.uv1=b.uv0; t.uv2=c.uv0;
             t.material=std::uint32_t(std::max(0,primitive.material));
             t.triangleId=std::uint32_t(out.triangles.size());
             out.triangles.push_back(t);
+            triangleCentroids.push_back(centroid(t));
         }
     }
     if(out.triangles.empty()) return out;
@@ -94,7 +103,7 @@ SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
         for(std::uint32_t i=first;i<first+count;++i) {
             const auto& t=out.triangles[out.triangleOrder[i]];
             bounds.add(t.p0);bounds.add(t.p1);bounds.add(t.p2);
-            centroidBounds.add(centroid(t));
+            centroidBounds.add(triangleCentroids[out.triangleOrder[i]]);
         }
         const std::uint32_t at=std::uint32_t(binary.size());
         binary.emplace_back();
@@ -114,12 +123,12 @@ SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
             const float lo=centroidLo[axis],hi=centroidHi[axis];
             if(hi-lo<=1.e-8f) continue;
             Bin bins[BinCount];
-            const auto coord=[&](const GpuTriangle& t) {
-                const auto c=centroid(t);return axis==0?c.x:axis==1?c.y:c.z;
+            const auto coord=[&](std::uint32_t id) {
+                const auto c=triangleCentroids[id];return axis==0?c.x:axis==1?c.y:c.z;
             };
             for(std::uint32_t i=first;i<first+count;++i) {
                 const auto& t=out.triangles[out.triangleOrder[i]];
-                Bin& bin=bins[binFor(coord(t),lo,hi)];
+                Bin& bin=bins[binFor(coord(out.triangleOrder[i]),lo,hi)];
                 ++bin.count;bin.bounds.add(t.p0);bin.bounds.add(t.p1);bin.bounds.add(t.p2);
             }
             BuildBounds leftBounds[BinCount-1],rightBounds[BinCount-1];
@@ -147,7 +156,7 @@ SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
             auto begin=out.triangleOrder.begin()+first;
             auto finish=out.triangleOrder.begin()+first+count;
             auto pivot=std::partition(begin,finish,[&](std::uint32_t id) {
-                const auto c=centroid(out.triangles[id]);
+                const auto c=triangleCentroids[id];
                 const float value=bestAxis==0?c.x:bestAxis==1?c.y:c.z;
                 return binFor(value,lo,hi)<=bestSplit;
             });
@@ -159,12 +168,12 @@ SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
                          centroidBounds.hi.z-centroidBounds.lo.z};
             int axis=e.y>e.x?1:0;if((axis==0?e.x:e.y)<e.z)axis=2;
             mid=first+count/2;
-            const auto coord=[axis](const GpuTriangle& t) {
-                const auto c=centroid(t);return axis==0?c.x:axis==1?c.y:c.z;
+            const auto coord=[axis,&triangleCentroids](std::uint32_t id) {
+                const auto c=triangleCentroids[id];return axis==0?c.x:axis==1?c.y:c.z;
             };
             std::nth_element(out.triangleOrder.begin()+first,out.triangleOrder.begin()+mid,
                 out.triangleOrder.begin()+first+count,[&](std::uint32_t l,std::uint32_t r) {
-                    return coord(out.triangles[l])<coord(out.triangles[r]);
+                    return coord(l)<coord(r);
                 });
         }
         const auto left=self(self,first,mid-first);
