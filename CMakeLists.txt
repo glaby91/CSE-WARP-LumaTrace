@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(CSE_WARP_LumaTrace VERSION 0.1.0 LANGUAGES CXX)
+project(CSE_WARP_LumaTrace VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,6 +28,7 @@ add_executable(CSE_WARP_LumaTrace
     src/app/progress_window.h
 )
 target_link_libraries(CSE_WARP_LumaTrace PRIVATE LumaTraceSceneLoader Qt6::Widgets)
+target_compile_definitions(CSE_WARP_LumaTrace PRIVATE LUMATRACE_VERSION=\"${PROJECT_VERSION}\")
 if(WIN32)
     target_sources(CSE_WARP_LumaTrace PRIVATE src/render/d3d11_scene_renderer.cpp src/render/d3d11_scene_renderer.h)
     target_link_libraries(CSE_WARP_LumaTrace PRIVATE d3d11 dxgi d3dcompiler)

@@ -97,13 +97,16 @@ std::array<float,16> normalMatrix(const scene::Matrix4& m) {
 void normalize(float& x,float& y,float& z) { const float l=std::sqrt(x*x+y*y+z*z); if(l>1.e-8f){x/=l;y/=l;z/=l;} }
 
 // Row-vector view-projection, Direct3D depth range [0,1].
-std::array<float,16> cameraMatrix(const scene::Bounds& bounds, float camera[3]) {
+std::array<float,16> cameraMatrix(const scene::Bounds& bounds, float camera[3],float yawDegrees=0.f,float pitchDegrees=0.f) {
     scene::Vec3 center = bounds.valid ? scene::Vec3{(bounds.minimum.x+bounds.maximum.x)*.5f,(bounds.minimum.y+bounds.maximum.y)*.5f,(bounds.minimum.z+bounds.maximum.z)*.5f} : scene::Vec3{};
     const float dx=bounds.maximum.x-bounds.minimum.x, dy=bounds.maximum.y-bounds.minimum.y, dz=bounds.maximum.z-bounds.minimum.z;
     const float radius=std::max(1.f,std::sqrt(dx*dx+dy*dy+dz*dz)*.5f);
     // Lift the subject slightly in frame and move the camera closer for a larger car.
     center.y -= radius*.12f;
-    float fx=.85f, fy=.48f, fz=1.f; normalize(fx,fy,fz);
+    const float baseYaw=std::atan2(.85f,1.f),basePitch=std::atan2(.48f,std::sqrt(.85f*.85f+1.f));
+    const float yaw=baseYaw+yawDegrees*kPi/180.f;
+    const float pitch=std::clamp(basePitch+pitchDegrees*kPi/180.f,-1.45f,1.45f);
+    float fx=std::sin(yaw)*std::cos(pitch),fy=std::sin(pitch),fz=std::cos(yaw)*std::cos(pitch); normalize(fx,fy,fz);
     camera[0]=center.x+fx*radius*1.5f; camera[1]=center.y+fy*radius*1.5f; camera[2]=center.z+fz*radius*1.5f;
     float zx=center.x-camera[0], zy=center.y-camera[1], zz=center.z-camera[2]; normalize(zx,zy,zz);
     float xx=zz, xy=0.f, xz=-zx; normalize(xx,xy,xz);
@@ -137,7 +140,7 @@ struct D3D11SceneRenderer::Impl {
     std::array<GpuTimerFrame,3> gpuTimers{}; bool gpuTimersReady=false; std::size_t gpuTimerCursor=0;
     ComPtr<ID3D11ShaderResourceView> computeBaseColorArray;
     std::array<ComPtr<ID3D11ShaderResourceView>,5> fallbackTextures;
-    std::array<float,16> vp{}; float camera[3]{}; float orbitCenter[3]{}, orbitAngleDegrees=0.f; float orbitAxis1[3]{},orbitBasis1[3]{},orbitAxis2[3]{},orbitBasis2[3]{}; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
+    std::array<float,16> vp{}; float camera[3]{}; scene::Bounds cameraBounds{}; float cameraYawDegrees=0.f,cameraPitchDegrees=0.f; float orbitCenter[3]{}, orbitAngleDegrees=0.f; float orbitAxis1[3]{},orbitBasis1[3]{},orbitAxis2[3]{},orbitBasis2[3]{}; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
     diagnostics::RunLogger* logger=nullptr; QString imageOutputPath;
 
     bool makeTexture(const QImage& source, ComPtr<ID3D11ShaderResourceView>& out, bool srgb=false) {
@@ -366,7 +369,7 @@ bool D3D11SceneRenderer::initialize(HWND hwnd,const scene::Scene& scene,const Sc
     {auto phase=logger.scope(QStringLiteral("swapchain, backbuffer, profondeur, ID triangle et staging PNG"));if(!x.createTargets(hwnd,status))return false;}
     {auto phase=logger.scope(QStringLiteral("HLSL · compilation des vertex/pixel/compute shaders et états D3D"));if(!x.createPipeline(status))return false;}
     {auto phase=logger.scope(QStringLiteral("ressources de scène et buffers GPU"));if(!x.createSceneResources(scene,bvh,status))return false;}
-    x.vp=cameraMatrix(scene.bounds,x.camera); x.orbitCenter[0]=(scene.bounds.minimum.x+scene.bounds.maximum.x)*.5f; x.orbitCenter[1]=(scene.bounds.minimum.y+scene.bounds.maximum.y)*.5f; x.orbitCenter[2]=(scene.bounds.minimum.z+scene.bounds.maximum.z)*.5f;
+    x.cameraBounds=scene.bounds;x.vp=cameraMatrix(scene.bounds,x.camera); x.orbitCenter[0]=(scene.bounds.minimum.x+scene.bounds.maximum.x)*.5f; x.orbitCenter[1]=(scene.bounds.minimum.y+scene.bounds.maximum.y)*.5f; x.orbitCenter[2]=(scene.bounds.minimum.z+scene.bounds.maximum.z)*.5f;
     float cx=.85f,cy=.48f,cz=1.f;normalize(cx,cy,cz);float rx=-cz,ry=0.f,rz=cx;normalize(rx,ry,rz);float ux=cz*ry-cy*rz,uy=cx*rz-cz*rx,uz=cy*rx-cx*ry;normalize(ux,uy,uz);
     x.orbitAxis1[0]=-rx+ux;x.orbitAxis1[1]=-ry+uy;x.orbitAxis1[2]=-rz+uz;normalize(x.orbitAxis1[0],x.orbitAxis1[1],x.orbitAxis1[2]);
     x.orbitAxis2[0]=-rx-ux;x.orbitAxis2[1]=-ry-uy;x.orbitAxis2[2]=-rz-uz;normalize(x.orbitAxis2[0],x.orbitAxis2[1],x.orbitAxis2[2]);
@@ -381,6 +384,10 @@ bool D3D11SceneRenderer::initialize(HWND hwnd,const scene::Scene& scene,const Sc
 }
 
 void D3D11SceneRenderer::setOrbitAngleDegrees(float degrees){impl_->orbitAngleDegrees=degrees;}
+void D3D11SceneRenderer::setCameraOrbitDegrees(float yawDegrees,float pitchDegrees){
+    auto& x=*impl_;x.cameraYawDegrees=yawDegrees;x.cameraPitchDegrees=std::clamp(pitchDegrees,-70.f,70.f);
+    x.vp=cameraMatrix(x.cameraBounds,x.camera,x.cameraYawDegrees,x.cameraPitchDegrees);
+}
 
 void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh,QImage* capturedFrame){
     Q_UNUSED(bvh);

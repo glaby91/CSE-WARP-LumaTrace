@@ -29,6 +29,7 @@ public:
                     diagnostics::RunLogger& logger, QString imageOutputPath, QString& status);
     void render(const scene::Scene& scene, const SceneBvh& bvh, QImage* capturedFrame = nullptr);
     void setOrbitAngleDegrees(float degrees);
+    void setCameraOrbitDegrees(float yawDegrees,float pitchDegrees);
     void setSamplesPerTriangle(std::uint32_t samples);
 
 private:

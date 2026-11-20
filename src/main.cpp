@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
     QApplication app(argc,argv);
     QCoreApplication::setOrganizationName(QStringLiteral("Symbiose Environnement"));
     QCoreApplication::setApplicationName(QStringLiteral("CSE-WARP-LumaTrace"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(LUMATRACE_VERSION));
 
     lumatrace::app::ProgressWindow progress;
     progress.show();
