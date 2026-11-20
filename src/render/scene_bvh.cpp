@@ -92,7 +92,11 @@ SceneBvh buildSceneBvh(const scene::Scene& source, std::uint32_t leafSize) {
         bool leaf=false;
     };
     std::vector<BinaryNode> binary;
-    binary.reserve(out.triangles.size()*2u/std::max(1u,leafSize));
+    // SAH splits can produce more internal nodes than the leaf-size lower bound predicts.
+    // Reserve closer to the observed node count to avoid a costly vector growth mid-build,
+    // while capping pathological small-leaf requests at the full-binary-tree upper bound.
+    const std::size_t estimatedNodes=out.triangles.size()*3u/std::max(1u,leafSize);
+    binary.reserve(std::min(out.triangles.size()*2u,estimatedNodes));
     constexpr int BinCount=12;
     const auto binFor=[&](float value,float lo,float hi) {
         const float normalized=(value-lo)/(hi-lo);
