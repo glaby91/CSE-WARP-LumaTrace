@@ -2,7 +2,7 @@ name: Build LumaTrace (Windows DX11)
 
 on:
   push:
-    branches: [main, codex/bvh4-wide-sah]
+    branches: [main, codex/bvh4-wide-sah, codex/lumatrace-opt-4passes]
     paths:
       - 'CMakeLists.txt'
       - 'src/**'
