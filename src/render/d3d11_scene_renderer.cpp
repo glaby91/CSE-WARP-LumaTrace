@@ -119,18 +119,19 @@ struct D3D11SceneRenderer::Impl {
     struct Draw { ComPtr<ID3D11Buffer> vb, ib; UINT indexCount=0, triangleBase=0; int material=0; };
     ComPtr<ID3D11Device> device; ComPtr<ID3D11DeviceContext> context; ComPtr<IDXGISwapChain1> swap;
     ComPtr<ID3D11RenderTargetView> backRtv, idRtv, msaaRtv; ComPtr<ID3D11Texture2D> backBuffer, imageStaging, idTexture, depthTexture, msaaColorTexture, msaaDepthTexture;
-    ComPtr<ID3D11ShaderResourceView> idSrv; ComPtr<ID3D11UnorderedAccessView> idUav, visibleUav, radianceUav;
+    ComPtr<ID3D11ShaderResourceView> idSrv; ComPtr<ID3D11UnorderedAccessView> idUav, visibleUav, radianceUav, radianceValidUav;
     ComPtr<ID3D11DepthStencilView> depthDsv, msaaDepthDsv; UINT msaaSamples=1, msaaQuality=0; ComPtr<ID3D11DepthStencilState> depthWrite, depthRead;
     ComPtr<ID3D11BlendState> alphaBlend; ComPtr<ID3D11RasterizerState> rasterState, rasterDoubleSided;
     ComPtr<ID3D11VertexShader> preVs, rasterVs; ComPtr<ID3D11PixelShader> prePs, rasterPs;
     ComPtr<ID3D11ComputeShader> collectCs, shadeCs; ComPtr<ID3D11InputLayout> inputLayout;
     ComPtr<ID3D11SamplerState> sampler; ComPtr<ID3D11Buffer> preCameraCb, rasterCameraCb, materialCb, lightCb, areaLightCb;
-    ComPtr<ID3D11Buffer> bvhBuffer, triangleBuffer, orderBuffer, materialBuffer, visibleBuffer, radianceBuffer;
+    ComPtr<ID3D11Buffer> bvhBuffer, triangleBuffer, orderBuffer, materialBuffer, visibleBuffer, radianceBuffer, radianceValidBuffer;
     ComPtr<ID3D11ShaderResourceView> bvhSrv, triangleSrv, orderSrv, materialSrv, visibleSrv, radianceSrv;
     std::vector<Draw> draws; ComPtr<ID3D11Buffer> emitterVb,emitterIb; UINT emitterIndexCount=0; std::vector<std::array<ComPtr<ID3D11ShaderResourceView>,5>> materialTextures;
     ComPtr<ID3D11ShaderResourceView> computeBaseColorArray;
     std::array<ComPtr<ID3D11ShaderResourceView>,5> fallbackTextures;
     std::array<float,16> vp{}; float camera[3]{}; float orbitCenter[3]{}, orbitAngleDegrees=0.f; float orbitAxis1[3]{},orbitBasis1[3]{},orbitAxis2[3]{},orbitBasis2[3]{}; UINT triCount=0; UINT samples=1; bool ready=false, imageExportPending=true, timingNextFrame=true;
+    std::array<UINT,19> radianceCacheKey{};bool radianceCacheKeyValid=false;
     diagnostics::RunLogger* logger=nullptr; QString imageOutputPath;
 
     bool makeTexture(const QImage& source, ComPtr<ID3D11ShaderResourceView>& out, bool srgb=false) {
@@ -226,9 +227,10 @@ struct D3D11SceneRenderer::Impl {
         ||!makeSrv(materialBuffer.Get(),UINT(gm.size()),materialSrv)){error=QStringLiteral("D3D11 : upload des matériaux impossible.");return false;}
         std::vector<UINT> zeros(triCount,0); std::vector<std::array<float,4>> lightZeros(triCount,{0,0,0,0});
         if(!makeBuffer(device.Get(),D3D11_BIND_UNORDERED_ACCESS|D3D11_BIND_SHADER_RESOURCE,D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,sizeof(UINT),zeros.data(),zeros.size(),visibleBuffer)
-        ||!makeBuffer(device.Get(),D3D11_BIND_UNORDERED_ACCESS|D3D11_BIND_SHADER_RESOURCE,D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,16,lightZeros.data(),lightZeros.size(),radianceBuffer)){error=QStringLiteral("D3D11 : buffers de travail compute impossibles.");return false;}
+        ||!makeBuffer(device.Get(),D3D11_BIND_UNORDERED_ACCESS|D3D11_BIND_SHADER_RESOURCE,D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,16,lightZeros.data(),lightZeros.size(),radianceBuffer)
+        ||!makeBuffer(device.Get(),D3D11_BIND_UNORDERED_ACCESS,D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,sizeof(UINT),zeros.data(),zeros.size(),radianceValidBuffer)){error=QStringLiteral("D3D11 : buffers de travail compute impossibles.");return false;}
         D3D11_UNORDERED_ACCESS_VIEW_DESC ud{}; ud.Format=DXGI_FORMAT_UNKNOWN; ud.ViewDimension=D3D11_UAV_DIMENSION_BUFFER; ud.Buffer.NumElements=triCount;
-        if(FAILED(device->CreateUnorderedAccessView(visibleBuffer.Get(),&ud,&visibleUav))||FAILED(device->CreateUnorderedAccessView(radianceBuffer.Get(),&ud,&radianceUav))
+        if(FAILED(device->CreateUnorderedAccessView(visibleBuffer.Get(),&ud,&visibleUav))||FAILED(device->CreateUnorderedAccessView(radianceBuffer.Get(),&ud,&radianceUav))||FAILED(device->CreateUnorderedAccessView(radianceValidBuffer.Get(),&ud,&radianceValidUav))
         ||!makeSrv(visibleBuffer.Get(),triCount,visibleSrv)||!makeSrv(radianceBuffer.Get(),triCount,radianceSrv)){error=QStringLiteral("D3D11 : vues compute impossibles.");return false;}
 
         const UINT white=0xffffffffu, normal=0xff8080ffu, black=0xff000000u;
@@ -399,7 +401,11 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh,QI
         position[1]=x.orbitCenter[1]+orbitRadius*(orbitAxis[1]*std::cos(orbitRadians)+direction*orbitBasis[1]*std::sin(orbitRadians));
         position[2]=x.orbitCenter[2]+orbitRadius*(orbitAxis[2]*std::cos(orbitRadians)+direction*orbitBasis[2]*std::sin(orbitRadians));
     }
-    lc.intensity=lc.intensity2=44.0f;lc.lightColor[0]=.25f;lc.lightColor[1]=.65f;lc.lightColor[2]=1.f;lc.lightColor2[0]=1.f;lc.lightColor2[1]=.45f;lc.lightColor2[2]=.15f;lc.angularRadius=lc.angularRadius2=.26f;updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
+    lc.intensity=lc.intensity2=44.0f;lc.lightColor[0]=.25f;lc.lightColor[1]=.65f;lc.lightColor[2]=1.f;lc.lightColor2[0]=1.f;lc.lightColor2[1]=.45f;lc.lightColor2[2]=.15f;lc.angularRadius=lc.angularRadius2=.26f;
+    const std::array<float,17> radianceInputs={lc.epsilon,lc.light[0],lc.light[1],lc.light[2],lc.intensity,lc.lightColor[0],lc.lightColor[1],lc.lightColor[2],lc.angularRadius,lc.light2[0],lc.light2[1],lc.light2[2],lc.intensity2,lc.lightColor2[0],lc.lightColor2[1],lc.lightColor2[2],lc.angularRadius2};
+    std::array<UINT,19> radianceKey{};radianceKey[0]=lc.samples;radianceKey[1]=lc.triangleCount;std::memcpy(radianceKey.data()+2,radianceInputs.data(),sizeof(radianceInputs));
+    if(!x.radianceCacheKeyValid||radianceKey!=x.radianceCacheKey){x.context->ClearUnorderedAccessViewUint(x.radianceValidUav.Get(),zero);x.radianceCacheKey=radianceKey;x.radianceCacheKeyValid=true;}
+    updateBuffer(x.context.Get(),x.lightCb.Get(),lc);ID3D11Buffer* light=x.lightCb.Get();x.context->CSSetConstantBuffers(0,1,&light);
     ID3D11ShaderResourceView* ids=x.idSrv.Get();x.context->CSSetShaderResources(0,1,&ids);ID3D11UnorderedAccessView* vis=x.visibleUav.Get();x.context->CSSetUnorderedAccessViews(0,1,&vis,nullptr);x.context->CSSetShader(x.collectCs.Get(),nullptr,0);x.context->Dispatch((kWidth+7)/8,(kHeight+7)/8,1);
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("HLSL compute · rayons d'ombre/réflexion et parcours BVH")));
@@ -409,8 +415,8 @@ void D3D11SceneRenderer::render(const scene::Scene& scene,const SceneBvh& bvh,QI
     ID3D11ShaderResourceView* computeBaseColor=x.computeBaseColorArray.Get();
     x.context->CSSetShaderResources(6,1,&computeBaseColor);
     ID3D11SamplerState* computeSampler=x.sampler.Get();x.context->CSSetSamplers(0,1,&computeSampler);
-    ID3D11UnorderedAccessView* outputs[2]={nullptr,x.radianceUav.Get()};x.context->CSSetUnorderedAccessViews(0,2,outputs,nullptr);x.context->CSSetShader(x.shadeCs.Get(),nullptr,0);x.context->Dispatch((x.triCount+63)/64,1,1);
-    ID3D11SamplerState* nullSampler=nullptr;x.context->CSSetShader(nullptr,nullptr,0);std::array<ID3D11ShaderResourceView*,6> nullComputeSrvs{};x.context->CSSetShaderResources(1,UINT(nullComputeSrvs.size()),nullComputeSrvs.data());x.context->CSSetSamplers(0,1,&nullSampler);x.context->CSSetUnorderedAccessViews(0,2,std::array<ID3D11UnorderedAccessView*,2>{}.data(),nullptr);
+    ID3D11UnorderedAccessView* outputs[3]={nullptr,x.radianceUav.Get(),x.radianceValidUav.Get()};x.context->CSSetUnorderedAccessViews(0,3,outputs,nullptr);x.context->CSSetShader(x.shadeCs.Get(),nullptr,0);x.context->Dispatch((x.triCount+63)/64,1,1);
+    ID3D11SamplerState* nullSampler=nullptr;x.context->CSSetShader(nullptr,nullptr,0);std::array<ID3D11ShaderResourceView*,6> nullComputeSrvs{};x.context->CSSetShaderResources(1,UINT(nullComputeSrvs.size()),nullComputeSrvs.data());x.context->CSSetSamplers(0,1,&nullSampler);x.context->CSSetUnorderedAccessViews(0,3,std::array<ID3D11UnorderedAccessView*,3>{}.data(),nullptr);
     passTiming.reset();
     if(logFrame&&x.logger)passTiming.emplace(x.logger->scope(QStringLiteral("raster Direct3D · textures, normales, alpha et affichage")));
     ID3D11RenderTargetView* color=x.msaaSamples>1?x.msaaRtv.Get():x.backRtv.Get();ID3D11DepthStencilView* rasterDepth=x.msaaSamples>1?x.msaaDepthDsv.Get():x.depthDsv.Get();x.context->OMSetRenderTargets(1,&color,rasterDepth);x.context->ClearRenderTargetView(color,clear);if(x.msaaSamples>1)x.context->ClearDepthStencilView(rasterDepth,D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL,1.f,0);x.context->OMSetDepthStencilState(x.depthWrite.Get(),0);x.context->VSSetShader(x.rasterVs.Get(),nullptr,0);x.context->PSSetShader(x.rasterPs.Get(),nullptr,0);ID3D11ShaderResourceView* lightSrv=x.radianceSrv.Get();x.context->PSSetShaderResources(5,1,&lightSrv); AreaLightConstants alc{};alc.position[0]=lc.light[0];alc.position[1]=lc.light[1];alc.position[2]=lc.light[2];alc.intensity=lc.intensity;alc.color[0]=lc.lightColor[0];alc.color[1]=lc.lightColor[1];alc.color[2]=lc.lightColor[2];alc.radius=lc.angularRadius;alc.position2[0]=lc.light2[0];alc.position2[1]=lc.light2[1];alc.position2[2]=lc.light2[2];alc.intensity2=lc.intensity2;alc.color2[0]=lc.lightColor2[0];alc.color2[1]=lc.lightColor2[1];alc.color2[2]=lc.lightColor2[2];alc.radius2=lc.angularRadius2;updateBuffer(x.context.Get(),x.areaLightCb.Get(),alc);ID3D11Buffer* areaLight=x.areaLightCb.Get();x.context->PSSetConstantBuffers(2,1,&areaLight);ID3D11SamplerState* samp=x.sampler.Get();x.context->PSSetSamplers(0,1,&samp);

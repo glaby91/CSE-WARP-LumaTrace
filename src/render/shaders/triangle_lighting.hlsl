@@ -29,6 +29,7 @@ Texture2DArray<float4> BaseColorMaps : register(t6);
 SamplerState MaterialSampler : register(s0);
 RWStructuredBuffer<uint> OutVisibleFlags : register(u0);
 RWStructuredBuffer<float4> TriangleRadiance : register(u1);
+RWStructuredBuffer<uint> RadianceValid : register(u2);
 
 cbuffer LightConstants : register(b0)
 {
@@ -219,6 +220,9 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
     Triangle tri = Triangles[triangleId];
     MaterialData sourceMaterial = Materials[tri.material];
     bool traceReflection = sourceMaterial.metallic > 0.0;
+    // Reuse diffuse triangle lighting while the light set is unchanged.
+    // Camera-dependent metallic reflections remain live and are refreshed every frame.
+    if (RadianceValid[triangleId] != 0 && !traceReflection) return;
     uint samples = clamp(SamplesPerTriangle, 1, 4);
     float3 accumulatedDiffuse = 0.0;
     float3 accumulatedReflection = 0.0;
@@ -292,4 +296,5 @@ void CSShadeVisibleTriangles(uint3 dispatchId : SV_DispatchThreadID)
     float invSamples = rcp(float(samples));
     TriangleRadiance[triangleId] = float4(accumulatedDiffuse * invSamples,
         dot(accumulatedReflection, float3(0.2126, 0.7152, 0.0722)) * invSamples);
+    RadianceValid[triangleId] = 1;
 }
