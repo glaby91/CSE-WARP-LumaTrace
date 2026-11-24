@@ -1,18 +1,19 @@
 # Expérience — reflet texturé déformé sur l’eau
 
 **Branche :** `experiment/reflet-texture-eau`  
-**Statut :** protocole expérimental à implémenter ; aucune modification du moteur ni de la branche `main`.
+**Statut :** approche validée pour un futur prototype, après la décomposition du moteur. Aucun code moteur n’est modifié et la branche `main` reste intacte.
 
-## But
+## Décision retenue
 
-Évaluer une méthode hybride peu coûteuse pour rendre le reflet d’une fresque sur un plan d’eau ondulé :
+Pour le reflet visible d’une fresque sur un bassin, commencer par une passe raster depuis une caméra virtuelle miroir, puis appliquer une légère déformation de texture dans le shader de l’eau. Cette méthode évite de rechercher exhaustivement les objets et leurs trajets avec des rayons : le raster et son test de profondeur déterminent déjà les objets visibles dans le reflet.
 
-1. Quelques rayons de repérage identifient les correspondances entre la fresque, la surface réfléchissante et l’image.
-2. Une texture de reflet est produite par projection/rasterisation.
-3. Le shader de l’eau déforme légèrement les coordonnées de cette texture en fonction des ondulations.
-4. Des rayons BVH supplémentaires restent disponibles pour vérifier les occultations et échantillonner les zones difficiles.
+Des rayons BVH clairsemés pourront être ajoutés en appoint pour contrôler ou raffiner les bords, les occultations et les zones où la projection est incertaine. Ils ne seront pas la méthode principale.
 
-L’objectif est de comparer le coût et l’apparence à un reflet calculé par rayons, sans supposer d’avance que l’approximation sera plus rapide ou suffisamment fidèle.
+Le prototype sera réalisé après la décomposition des modules du moteur, dans un espace de test séparé. Aucun résultat de performance n’est encore mesuré ; le temps réel reste un objectif à vérifier sur la machine cible.
+
+## But du test
+
+Évaluer le coût et l’apparence d’un reflet texturé sur un plan d’eau ondulé, et le comparer à un rendu de référence par rayons si le backend existant le permet.
 
 ## Scène minimale
 
@@ -24,46 +25,45 @@ L’objectif est de comparer le coût et l’apparence à un reflet calculé par
 
 ## Méthode candidate
 
-### 1. Texture de reflet de référence
+### 1. Passe raster miroir
 
-Produire une texture de la fresque dans l’espace de réflexion du bassin. Pour un bassin plan, la projection de base peut être obtenue par la transformation miroir de la caméra par rapport au plan d’eau, puis une passe raster classique avec test de profondeur.
+Créer une caméra virtuelle, symétrique par rapport au plan du bassin, puis rasteriser dans une texture les objets visibles depuis cette caméra. Utiliser un test de profondeur pour gérer les objets qui se cachent les uns les autres.
 
-La texture doit rester ancrée dans l’espace du bassin, et non dans l’écran, afin d’éviter qu’elle glisse lorsque la caméra bouge.
+La texture doit rester ancrée dans l’espace du bassin, et non dans l’écran, afin d’éviter qu’elle glisse lorsque la caméra bouge. La passe peut être limitée aux objets susceptibles d’apparaître dans le reflet et calculée à résolution réduite si nécessaire.
 
-### 2. Repérage par rayons clairsemés
-
-Lancer une grille clairsemée de rayons depuis la caméra vers les zones visibles du bassin. Les rayons permettent de :
-
-- confirmer les surfaces d’eau visibles ;
-- repérer les limites de la fresque reflétée ;
-- détecter les occultations et les écarts de projection ;
-- signaler les tuiles d’image où un échantillonnage plus dense est utile.
-
-Le nombre de rayons est contrôlé par la résolution des tuiles et par les changements de scène. Il ne s’agit pas d’un rayon unique par objet, ni d’un rayon par pixel.
-
-### 3. Déformation sur l’eau ondulée
+### 2. Déformation sur l’eau ondulée
 
 Dans le shader de l’eau, calculer les UV du reflet à partir de la projection de base, puis appliquer un décalage UV lié aux normales ou à une fonction d’ondes. Le maillage d’eau peut onduler séparément : sa géométrie donne le relief et les normales, tandis que le décalage UV donne le mouvement du reflet.
 
 Éviter de cumuler une forte déformation géométrique et un fort décalage UV. La déformation doit être réglable et rester stable dans l’espace de la scène.
 
-### 4. Raffinement local
+### 3. Rayons BVH en appoint
 
-Quand les rayons clairsemés détectent un bord, une occultation ou une variation forte, subdiviser localement la tuile et densifier les échantillons. Les zones uniformes gardent une faible densité. Les résultats voisins peuvent être interpolés, avec une limite aux discontinuités de profondeur et aux silhouettes.
+Si nécessaire, lancer une grille clairsemée de rayons dans les zones visibles du bassin pour :
+
+- contrôler les limites de la fresque reflétée ;
+- détecter les occultations et écarts de projection ;
+- signaler les tuiles d’image où un échantillonnage plus dense est utile.
+
+Subdiviser localement les tuiles qui montrent une forte variation. Les zones uniformes gardent une faible densité. Ce mécanisme demeure optionnel tant que le rendu raster suffit.
+
+### 4. Budget temps réel
+
+Mesurer séparément le coût de la passe miroir, du shader d’eau et du raffinement BVH. Si nécessaire, réduire la résolution de la texture, ne rasteriser que les objets visibles dans le bassin ou actualiser la texture moins souvent lorsque la scène change peu.
 
 ## Comparaisons à effectuer
 
 Comparer, sur la même caméra et la même scène :
 
-- texture réfléchie plane sans déformation ;
-- texture réfléchie avec déformation UV ;
-- méthode candidate avec repérage clairsemé et raffinement local ;
+- texture miroir plane sans déformation ;
+- texture miroir avec déformation UV ;
+- texture miroir avec raffinement BVH clairsemé ;
 - rendu de référence par rayons, si le backend existant le permet.
 
 Mesurer séparément :
 
 - temps de génération/actualisation de la texture ;
-- temps de la passe de repérage BVH ;
+- temps de la passe de repérage BVH, si elle est activée ;
 - temps shader et temps total par image ;
 - stabilité lors du mouvement caméra et de l’animation de l’eau ;
 - erreurs visibles aux bords, sur les occultations et sur les hautes fréquences.
@@ -72,18 +72,18 @@ Mesurer séparément :
 
 - Le reflet reste attaché au bassin pendant le mouvement caméra.
 - Les ondulations déforment le reflet sans glissement ni scintillement manifeste.
-- Les occultations et limites importantes sont détectées par le raffinement.
+- Les occultations restent cohérentes ou sont identifiées par le raffinement.
 - Le temps total est inférieur au rendu de référence dans la scène de test, avec une qualité visuelle jugée acceptable.
 - Les mesures et captures sont conservées avec les paramètres utilisés.
 
 ## Limites connues à vérifier
 
-Une texture seule ne reconstitue pas les parties de la fresque cachées à la caméra principale. La projection miroir rasterisée doit donc regarder la scène depuis le point de vue réfléchi. Une méthode à rayons peut encore être nécessaire aux occultations complexes, aux bords et aux surfaces très irrégulières. Le test doit aussi vérifier si la mise à jour de la texture coûte moins cher que les rayons qu’elle remplace.
+Une texture seule ne reconstitue pas les parties de la scène absentes depuis le point de vue réfléchi. La caméra miroir doit donc rasteriser la scène depuis ce point de vue. Les occultations complexes, les bords et les surfaces très irrégulières peuvent nécessiter un raffinement. Le test doit vérifier si la passe miroir coûte moins cher que la méthode par rayons qu’elle remplace.
 
 ## Suite de travail
 
-1. Ajouter une petite scène autonome de test.
-2. Implémenter la projection miroir rasterisée et les paramètres d’ondulation.
-3. Ajouter l’échantillonnage BVH clairsemé puis adaptatif.
-4. Capturer et comparer les quatre modes ci-dessus.
-5. Ne proposer une intégration à LumaTrace qu’après mesure et revue du résultat.
+1. Terminer la décomposition des modules du moteur.
+2. Ajouter une petite scène autonome de test, sans intégrer le prototype au moteur principal.
+3. Implémenter la passe miroir rasterisée et les paramètres d’ondulation.
+4. Ajouter le raffinement BVH clairsemé uniquement si le test le justifie.
+5. Capturer et comparer les modes ci-dessus, puis décider d’une intégration sur la base des mesures.
